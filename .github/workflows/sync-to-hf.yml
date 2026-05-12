@@ -23,6 +23,9 @@ jobs:
         run: |
           cd backend
 
+          rm -f *.png
+          rm -rf __pycache__
+
           git init
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
