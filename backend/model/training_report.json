@@ -1,0 +1,100 @@
+{
+  "trained_at": "2026-05-11T01:48:23.245894",
+  "model_version": "v20260511_0148",
+  "data_path": "model/gas_fee_historical.csv",
+  "chain": "Base L2",
+  "train_rows": 7910,
+  "test_rows": 899,
+  "train_period_start": "2026-04-11 02:07:17",
+  "train_period_end": "2026-05-08 13:12:17",
+  "has_gas_ratio_regressor": true,
+  "has_ratio_model": true,
+  "fee_prophet_config": {
+    "changepoint_prior_scale": 0.15,
+    "seasonality_mode": "additive",
+    "yearly_seasonality": false,
+    "weekly_seasonality": true,
+    "daily_seasonality": true,
+    "interval_width": 0.8,
+    "uncertainty_samples": 500
+  },
+  "ratio_prophet_config": {
+    "changepoint_prior_scale": 0.05,
+    "seasonality_mode": "multiplicative",
+    "yearly_seasonality": false,
+    "weekly_seasonality": true,
+    "daily_seasonality": true,
+    "interval_width": 0.8,
+    "uncertainty_samples": 200
+  },
+  "base_l2_floor_gwei": 0.005,
+  "floor_tolerance": 0.0001,
+  "spike_z_threshold": 2.0,
+  "rolling_window_hours": 6,
+  "percentiles": {
+    "p25": 0.005,
+    "p50": 0.005,
+    "p75": 0.005,
+    "p90": 0.005,
+    "p95": 0.005,
+    "p99": 0.005091015799999999,
+    "mean": 0.005007613935524653,
+    "std": 0.000122607673045338
+  },
+  "ratio_percentiles": {
+    "p25": 0.0714,
+    "p50": 0.08875,
+    "p75": 0.109375,
+    "p90": 0.1318
+  },
+  "metrics_overall": {
+    "mae": 1.8438206289046526e-05,
+    "rmse": 2.656003979635256e-05,
+    "mape": 0.3686621880204209,
+    "within_10pct": 100.0
+  },
+  "metrics_per_horizon": {
+    "1h": {
+      "mae": 1.558972925989671e-05,
+      "rmse": 1.773036623820727e-05,
+      "mape": 0.3115229371966987,
+      "within_10pct": 100.0
+    },
+    "2h": {
+      "mae": 2.591309119216553e-05,
+      "rmse": 5.413239367290474e-05,
+      "mape": 0.5160948705057745,
+      "within_10pct": 100.0
+    },
+    "3h": {
+      "mae": 2.628791624111455e-05,
+      "rmse": 5.029005756200826e-05,
+      "mape": 0.523553234941879,
+      "within_10pct": 100.0
+    }
+  },
+  "ci_coverage_pct": 99.77753058954394,
+  "mape_ok": true,
+  "ratio_metrics": {
+    "mae": 0.039767682584659035,
+    "rmse": 0.04821487950576474,
+    "mape": 56.68282398552827,
+    "within_10pct": 9.454949944382648
+  },
+  "savings_simulation": {
+    "avg_savings_pct_all": 0.027896866657252488,
+    "avg_savings_pct_spike": 3.809943236478757,
+    "max_savings_pct": 5.82048253817567,
+    "spike_frequency_pct": 0.4634994206257242,
+    "n_spike_periods": 4
+  },
+  "data_characteristics": {
+    "floor_pct": 99.09235307465396,
+    "spike_pct": 0.9416836850465169,
+    "n_spikes": 83,
+    "fee_min": 0.005,
+    "fee_max": 0.01052083,
+    "fee_mean": 0.00500697799182654,
+    "fee_std": 0.00011629646883868744
+  }
+}
