@@ -5,9 +5,12 @@ import os
 from datetime import datetime, timedelta
 from prophet import Prophet
 from prophet.serialize import model_to_json
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, precision_score, recall_score, f1_score
+from prophet.diagnostics import cross_validation, performance_metrics
+import logging
 import warnings
 
+logging.getLogger('prophet').setLevel(logging.WARNING)
 warnings.filterwarnings("ignore")
 
 DATA_PATH         = "model/gas_fee_historical.csv"
@@ -57,16 +60,50 @@ def calculate_mape(actual: np.ndarray, predicted: np.ndarray) -> float:
 
         mae = float(np.mean(np.abs(actual - predicted)))
         mean_val = float(np.mean(actual))
-        return (mae / mean_val * 100) if mean_val > 0 else float("nan")
+        return (mae / mean_val * 100) if mean_val > 0 else None
     return float(np.mean(np.abs((actual[mask] - predicted[mask]) / actual[mask])) * 100)
 
-def calculate_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict:
+def calculate_metrics(actual: np.ndarray, predicted: np.ndarray, is_spike_actual: np.ndarray = None) -> dict:
     mae  = float(mean_absolute_error(actual, predicted))
     rmse = float(np.sqrt(mean_squared_error(actual, predicted)))
     mape = calculate_mape(actual, predicted)
 
     within_10pct = float(np.mean(np.abs(actual - predicted) / (actual + 1e-10) < 0.10) * 100)
-    return {"mae": mae, "rmse": rmse, "mape": mape, "within_10pct": within_10pct}
+    
+    spike_metrics = {}
+    if is_spike_actual is not None and len(is_spike_actual) == len(actual):
+        is_spike_pred = predicted > (BASE_L2_FLOOR_GWEI + FLOOR_TOLERANCE)
+        precision = float(precision_score(is_spike_actual, is_spike_pred, zero_division=0))
+        recall = float(recall_score(is_spike_actual, is_spike_pred, zero_division=0))
+        f1 = float(f1_score(is_spike_actual, is_spike_pred, zero_division=0))
+        
+        spike_mask = is_spike_actual
+        if spike_mask.sum() > 0:
+            spike_mae = float(mean_absolute_error(actual[spike_mask], predicted[spike_mask]))
+        else:
+            spike_mae = None
+            
+        spike_metrics = {
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "spike_mae": spike_mae
+        }
+        
+    return {"mae": mae, "rmse": rmse, "mape": mape, "within_10pct": within_10pct, **spike_metrics}
+
+def calculate_baselines(df_train: pd.DataFrame, df_test: pd.DataFrame) -> dict:
+    actuals = df_test["base_fee_gwei"].values
+    persistence_pred = np.full_like(actuals, df_train["base_fee_gwei"].iloc[-1])
+    sma6h = df_train["base_fee_gwei"].tail(72).mean()
+    sma_pred = np.full_like(actuals, sma6h)
+    mean_pred = np.full_like(actuals, df_train["base_fee_gwei"].mean())
+    
+    return {
+        "persistence_mae": float(mean_absolute_error(actuals, persistence_pred)),
+        "sma6h_mae": float(mean_absolute_error(actuals, sma_pred)),
+        "global_mean_mae": float(mean_absolute_error(actuals, mean_pred))
+    }
 
 def compute_z_scores(series: pd.Series, window: int = 288) -> pd.Series:
 
@@ -232,9 +269,16 @@ log("\n" + "=" * 56)
 log("  EVALUASI MODEL — Base L2 Optimized")
 log("=" * 56)
 
-m_all = calculate_metrics(df_eval_fee["y"].values, df_eval_fee["yhat"].values)
+is_spike_actual = df_eval_fee["y"].values > (BASE_L2_FLOOR_GWEI + FLOOR_TOLERANCE)
+m_all = calculate_metrics(df_eval_fee["y"].values, df_eval_fee["yhat"].values, is_spike_actual)
 ci_coverage = compute_ci_coverage(df_eval_fee)
 savings_sim = compute_savings_simulation(df_eval_fee)
+baselines = calculate_baselines(df_train, df_test)
+
+log(f"\n  Baseline Comparisons (MAE):")
+log(f"  Persistence MAE = {baselines['persistence_mae']:.8f}")
+log(f"  SMA 6h MAE      = {baselines['sma6h_mae']:.8f}")
+log(f"  Global Mean MAE = {baselines['global_mean_mae']:.8f}")
 
 log(f"\n  Fee Model (24h test):")
 log(f"  MAE           = {m_all['mae']:.8f} Gwei")
@@ -242,6 +286,13 @@ log(f"  RMSE          = {m_all['rmse']:.8f} Gwei")
 log(f"  MAPE*         = {m_all['mape']:.2f}%  (* spike periods only)")
 log(f"  Within 10%    = {m_all['within_10pct']:.1f}% of predictions")
 log(f"  CI Coverage   = {ci_coverage:.1f}%  (target: ~80%)")
+
+log(f"\n  Spike Detection Metrics:")
+log(f"  Precision     = {m_all.get('precision', 0):.2f}")
+log(f"  Recall        = {m_all.get('recall', 0):.2f}")
+log(f"  F1-Score      = {m_all.get('f1', 0):.2f}")
+log(f"  Spike MAE     = {m_all.get('spike_mae', 0):.8f}")
+
 log(f"\n  Savings Simulation:")
 log(f"  Avg saving (all)    = {savings_sim['avg_savings_pct_all']:.2f}%")
 log(f"  Avg saving (spike)  = {savings_sim['avg_savings_pct_spike']:.2f}%")
@@ -252,11 +303,26 @@ horizon_metrics = {}
 for hours in [1, 2, 3]:
     n = hours * 12
     sub = df_eval_fee.head(n)
-    m   = calculate_metrics(sub["y"].values, sub["yhat"].values)
+    sub_spike = is_spike_actual[:n]
+    m   = calculate_metrics(sub["y"].values, sub["yhat"].values, sub_spike)
     horizon_metrics[f"{hours}h"] = m
-    log(f"\n  {hours}h horizon: MAE={m['mae']:.8f} MAPE={m['mape']:.2f}% Within10%={m['within_10pct']:.1f}%")
+    log(f"\n  {hours}h horizon: MAE={m['mae']:.8f} MAPE={m['mape']:.2f}% F1={m.get('f1',0):.2f}")
 
 log("=" * 56 + "\n")
+
+log("Menjalankan Ablation Study (Tanpa Gas Ratio Regressor)...")
+ablation_model = Prophet(**FEE_PROPHET_CONFIG)
+ablation_model.fit(pd.DataFrame({"ds": df_train["timestamp"], "y": df_train["base_fee_gwei"]}))
+fc_ablation = ablation_model.predict(pd.DataFrame({"ds": df_test["timestamp"]}))
+fc_ablation["yhat"] = fc_ablation["yhat"].clip(lower=0)
+m_ablation = calculate_metrics(df_test["base_fee_gwei"].values, fc_ablation["yhat"].values, is_spike_actual)
+log(f"  Tanpa Regressor -> MAE={m_ablation['mae']:.8f}, F1={m_ablation.get('f1',0):.2f}")
+
+log("\nMenjalankan Time-Series Cross Validation (Expanding Window)...")
+cv_results = cross_validation(ablation_model, initial=f'{MIN_TRAIN_DAYS} days', period='1 days', horizon='1 days')
+cv_metrics = performance_metrics(cv_results)
+cv_mae_mean = cv_metrics['mae'].mean()
+log(f"  CV MAE Mean (1-day horizon) = {cv_mae_mean:.8f}")
 
 log("Retraining final models pada FULL data...")
 
@@ -327,6 +393,9 @@ report = {
     "ci_coverage_pct":      ci_coverage,
     "mape_ok":              m_all["mape"] < MAPE_THRESHOLD,
     "ratio_metrics":        ratio_metrics,
+    "baselines":            baselines,
+    "ablation_metrics":     m_ablation,
+    "cv_mae_mean":          cv_mae_mean,
 
     "savings_simulation":   savings_sim,
 

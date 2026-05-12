@@ -619,6 +619,40 @@ def get_analysis():
         },
     }
 
+@app.get("/api/academic-evaluation")
+def get_academic_evaluation():
+    return {
+        "model_version": MODEL_VERSION,
+        "evaluation_timestamp": REPORT.get("trained_at"),
+        "data_summary": {
+            "total_records": REPORT.get("train_rows", 0) + REPORT.get("test_rows", 0),
+            "floor_percentage": REPORT.get("data_characteristics", {}).get("floor_pct", 0),
+            "spike_percentage": REPORT.get("data_characteristics", {}).get("spike_pct", 0),
+        },
+        "baseline_comparison_mae": REPORT.get("baselines", {}),
+        "prophet_overall_metrics": REPORT.get("metrics_overall", {}),
+        "spike_classification": {
+            "precision": REPORT.get("metrics_overall", {}).get("precision", 0),
+            "recall": REPORT.get("metrics_overall", {}).get("recall", 0),
+            "f1_score": REPORT.get("metrics_overall", {}).get("f1", 0),
+            "spike_mae": REPORT.get("metrics_overall", {}).get("spike_mae", 0),
+        },
+        "ablation_study": {
+            "with_gas_ratio_mae": REPORT.get("metrics_overall", {}).get("mae", 0),
+            "without_gas_ratio_mae": REPORT.get("ablation_metrics", {}).get("mae", 0),
+            "with_gas_ratio_f1": REPORT.get("metrics_overall", {}).get("f1", 0),
+            "without_gas_ratio_f1": REPORT.get("ablation_metrics", {}).get("f1", 0),
+        },
+        "time_series_cross_validation": {
+            "cv_mae_mean_1d": REPORT.get("cv_mae_mean", 0)
+        },
+        "ratio_model_status": {
+            "mape": REPORT.get("ratio_metrics", {}).get("mape", 0) if REPORT.get("ratio_metrics") else None,
+            "within_10pct": REPORT.get("ratio_metrics", {}).get("within_10pct", 0) if REPORT.get("ratio_metrics") else None,
+            "conclusion": "Failed component" if (REPORT.get("ratio_metrics", {}).get("mape", 0) > 50) else "Acceptable"
+        }
+    }
+
 @app.get("/api/status")
 def get_status():
     data_ok        = os.path.exists(DATA_PATH)

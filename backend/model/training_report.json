@@ -1,12 +1,12 @@
 {
-  "trained_at": "2026-05-11T01:48:23.245894",
-  "model_version": "v20260511_0148",
+  "trained_at": "2026-05-12T08:40:55.363136",
+  "model_version": "v20260512_0840",
   "data_path": "model/gas_fee_historical.csv",
   "chain": "Base L2",
-  "train_rows": 7910,
-  "test_rows": 899,
+  "train_rows": 8823,
+  "test_rows": 760,
   "train_period_start": "2026-04-11 02:07:17",
-  "train_period_end": "2026-05-08 13:12:17",
+  "train_period_end": "2026-05-11 08:39:03",
   "has_gas_ratio_regressor": true,
   "has_ratio_model": true,
   "fee_prophet_config": {
@@ -37,64 +37,96 @@
     "p75": 0.005,
     "p90": 0.005,
     "p95": 0.005,
-    "p99": 0.005091015799999999,
-    "mean": 0.005007613935524653,
-    "std": 0.000122607673045338
+    "p99": 0.005081939,
+    "mean": 0.005006966919415165,
+    "std": 0.0001162044862951713
   },
   "ratio_percentiles": {
-    "p25": 0.0714,
-    "p50": 0.08875,
-    "p75": 0.109375,
-    "p90": 0.1318
+    "p25": 0.0702,
+    "p50": 0.0872,
+    "p75": 0.1079,
+    "p90": 0.1304
   },
   "metrics_overall": {
-    "mae": 1.8438206289046526e-05,
-    "rmse": 2.656003979635256e-05,
-    "mape": 0.3686621880204209,
-    "within_10pct": 100.0
+    "mae": 1.5005026800874167e-05,
+    "rmse": 2.3391788748031837e-05,
+    "mape": 0.30001267572638285,
+    "within_10pct": 100.0,
+    "precision": 0.2,
+    "recall": 0.3333333333333333,
+    "f1": 0.25,
+    "spike_mae": 0.0001265947507888184
   },
   "metrics_per_horizon": {
     "1h": {
-      "mae": 1.558972925989671e-05,
-      "rmse": 1.773036623820727e-05,
-      "mape": 0.3115229371966987,
-      "within_10pct": 100.0
+      "mae": 8.303199446934676e-06,
+      "rmse": 1.0609274132815887e-05,
+      "mape": 0.16606398893869354,
+      "within_10pct": 100.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "spike_mae": null
     },
     "2h": {
-      "mae": 2.591309119216553e-05,
-      "rmse": 5.413239367290474e-05,
-      "mape": 0.5160948705057745,
-      "within_10pct": 100.0
+      "mae": 9.041528767681547e-06,
+      "rmse": 1.0820048837124021e-05,
+      "mape": 0.18083057535363095,
+      "within_10pct": 100.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "spike_mae": null
     },
     "3h": {
-      "mae": 2.628791624111455e-05,
-      "rmse": 5.029005756200826e-05,
-      "mape": 0.523553234941879,
-      "within_10pct": 100.0
+      "mae": 9.575245947078407e-06,
+      "rmse": 1.1223670784284372e-05,
+      "mape": 0.1915049189415681,
+      "within_10pct": 100.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "spike_mae": null
     }
   },
-  "ci_coverage_pct": 99.77753058954394,
+  "ci_coverage_pct": 99.60526315789474,
   "mape_ok": true,
   "ratio_metrics": {
-    "mae": 0.039767682584659035,
-    "rmse": 0.04821487950576474,
-    "mape": 56.68282398552827,
-    "within_10pct": 9.454949944382648
+    "mae": 0.0220262585711048,
+    "rmse": 0.03470579505099436,
+    "mape": 26.146657695157266,
+    "within_10pct": 24.342105263157894
   },
+  "baselines": {
+    "persistence_mae": 1.4642763157894729e-06,
+    "sma6h_mae": 1.4642763157894729e-06,
+    "global_mean_mae": 8.182827435172775e-06
+  },
+  "ablation_metrics": {
+    "mae": 1.3721266333661471e-05,
+    "rmse": 1.931930014921363e-05,
+    "mape": 0.2743449833009488,
+    "within_10pct": 100.0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "spike_mae": 0.0001721569915976081
+  },
+  "cv_mae_mean": 6.210101305423547e-05,
   "savings_simulation": {
-    "avg_savings_pct_all": 0.027896866657252488,
-    "avg_savings_pct_spike": 3.809943236478757,
-    "max_savings_pct": 5.82048253817567,
-    "spike_frequency_pct": 0.4634994206257242,
-    "n_spike_periods": 4
+    "avg_savings_pct_all": 0.030038111429788517,
+    "avg_savings_pct_spike": 3.2727909110305533,
+    "max_savings_pct": 4.0154189630977655,
+    "spike_frequency_pct": 0.4143646408839779,
+    "n_spike_periods": 3
   },
   "data_characteristics": {
-    "floor_pct": 99.09235307465396,
-    "spike_pct": 0.9416836850465169,
-    "n_spikes": 83,
+    "floor_pct": 99.13433458489779,
+    "spike_pct": 0.9908218606591572,
+    "n_spikes": 95,
     "fee_min": 0.005,
     "fee_max": 0.01052083,
-    "fee_mean": 0.00500697799182654,
-    "fee_std": 0.00011629646883868744
+    "fee_mean": 0.005006530520713763,
+    "fee_std": 0.00011157134903961071
   }
 }
