@@ -7,18 +7,22 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from prophet.serialize import model_from_json
+import lightgbm as lgb
 from pydantic import BaseModel
+import warnings
 
-FEE_MODEL_PATH    = "model/prophet_fee_model.json"
-RATIO_MODEL_PATH  = "model/prophet_ratio_model.json"
-REPORT_PATH       = "model/training_report.json"
-DATA_PATH           = "model/gas_fee_historical.csv"
+warnings.filterwarnings("ignore")
+
+FEE_MODEL_LOWER_PATH  = "model/lgbm_fee_lower.txt"
+FEE_MODEL_MEDIAN_PATH = "model/lgbm_fee_median.txt"
+FEE_MODEL_UPPER_PATH  = "model/lgbm_fee_upper.txt"
+RATIO_MODEL_PATH      = "model/lgbm_ratio_median.txt"
+REPORT_PATH           = "model/training_report.json"
+DATA_PATH             = "model/gas_fee_historical.csv"
 
 WIB_OFFSET          = timedelta(hours=7)
 FORECAST_PERIODS    = 289
 FREQ                = "5min"
-
 ETH_PRICE_USD       = 3000
 
 BASE_L2_FLOOR_GWEI  = 10.0
@@ -27,7 +31,6 @@ SPIKE_Z_THRESHOLD   = 2.0
 
 RATIO_CONGESTION_THRESHOLD   = 0.80
 RATIO_HIGH_THRESHOLD         = 0.90
-
 SPIKE_IMMINENT_RATIO_DELTA   = 0.15
 FEE_RECOVERY_THRESHOLD       = 0.85
 MIN_SAVINGS_PCT              = 2.0
@@ -44,16 +47,16 @@ app.add_middleware(
 )
 
 try:
-    with open(FEE_MODEL_PATH, "r") as f:
-        FEE_MODEL = model_from_json(f.read())
-except FileNotFoundError:
-    raise RuntimeError(f"Fee model tidak ditemukan: {FEE_MODEL_PATH}")
+    FEE_MODEL_LOWER  = lgb.Booster(model_file=FEE_MODEL_LOWER_PATH)
+    FEE_MODEL_MEDIAN = lgb.Booster(model_file=FEE_MODEL_MEDIAN_PATH)
+    FEE_MODEL_UPPER  = lgb.Booster(model_file=FEE_MODEL_UPPER_PATH)
+except Exception as e:
+    raise RuntimeError(f"Gagal memuat model Fee LightGBM: {e}")
 
 RATIO_MODEL = None
 try:
-    with open(RATIO_MODEL_PATH, "r") as f:
-        RATIO_MODEL = model_from_json(f.read())
-except FileNotFoundError:
+    RATIO_MODEL = lgb.Booster(model_file=RATIO_MODEL_PATH)
+except Exception:
     pass
 
 try:
@@ -64,75 +67,100 @@ try:
     FLOOR_TOLERANCE     = REPORT.get("floor_tolerance",    FLOOR_TOLERANCE)
     SPIKE_Z_THRESHOLD   = REPORT.get("spike_z_threshold",  SPIKE_Z_THRESHOLD)
 
-    GLOBAL_P25    = REPORT["percentiles"]["p25"]
+    GLOBAL_P25    = REPORT["percentiles"].get("p25", 0.0)
     GLOBAL_P75    = REPORT["percentiles"]["p75"]
     GLOBAL_P90    = REPORT["percentiles"]["p90"]
     GLOBAL_P99    = REPORT["percentiles"]["p99"]
     GLOBAL_MEAN   = REPORT["percentiles"]["mean"]
     GLOBAL_STD    = REPORT["percentiles"]["std"]
+    
     MODEL_VERSION = REPORT.get("model_version", "unknown")
-    HAS_REGRESSOR = REPORT.get("has_gas_ratio_regressor", False)
-    HAS_RATIO_MODEL = REPORT.get("has_ratio_model", False) and RATIO_MODEL is not None
-
-    RATIO_P75 = REPORT.get("ratio_percentiles", {}).get("p75", 0.7) if REPORT.get("ratio_percentiles") else 0.7
-    RATIO_P90 = REPORT.get("ratio_percentiles", {}).get("p90", 0.85) if REPORT.get("ratio_percentiles") else 0.85
+    MODEL_FEATURES = REPORT.get("features", [])
+    HAS_RATIO_MODEL = RATIO_MODEL is not None
 
 except FileNotFoundError:
     raise RuntimeError(f"Report tidak ditemukan: {REPORT_PATH}")
 
-def get_current_data() -> tuple[Optional[float], float, Optional[str], float, float]:
+def get_current_data() -> tuple[Optional[float], float, Optional[str], dict]:
     try:
         cols = ["timestamp", "base_fee_gwei"]
-        if HAS_REGRESSOR:
+        if "gas_used_ratio" in MODEL_FEATURES or "ratio_lag_1" in MODEL_FEATURES:
             cols.append("gas_used_ratio")
 
         df = pd.read_csv(DATA_PATH, usecols=cols).tail(300)
-
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_localize(None)
         df = df.sort_values("timestamp").reset_index(drop=True)
 
         window = 72
-        df["roll_mean"] = df["base_fee_gwei"].rolling(window, min_periods=6).mean()
-        df["roll_std"]  = df["base_fee_gwei"].rolling(window, min_periods=6).std()
+        df["fee_rolling_mean"] = df["base_fee_gwei"].rolling(window, min_periods=6).mean()
+        df["fee_rolling_std"]  = df["base_fee_gwei"].rolling(window, min_periods=6).std()
+        df["fee_rolling_p75"]  = df["base_fee_gwei"].rolling(window, min_periods=6).quantile(0.75)
+
+        if "gas_used_ratio" in df.columns:
+            df["ratio_rolling_mean"] = df["gas_used_ratio"].rolling(window, min_periods=6).mean()
+            df["ratio_rolling_std"]  = df["gas_used_ratio"].rolling(window, min_periods=6).std()
 
         latest = df.iloc[-1]
         fee    = float(latest["base_fee_gwei"])
         ratio  = float(latest["gas_used_ratio"]) if "gas_used_ratio" in df.columns else 0.5
         ts_wib = (latest["timestamp"] + WIB_OFFSET).strftime("%d %b %Y, %H:%M WIB")
 
-        roll_mean = float(latest["roll_mean"]) if not pd.isna(latest["roll_mean"]) else GLOBAL_MEAN
-        roll_std  = float(latest["roll_std"])  if not pd.isna(latest["roll_std"])  else GLOBAL_STD
+        latest_features = {
+            "fee_lag_1": fee,
+            "fee_rolling_mean": float(latest["fee_rolling_mean"]) if not pd.isna(latest["fee_rolling_mean"]) else GLOBAL_MEAN,
+            "fee_rolling_std": float(latest["fee_rolling_std"]) if not pd.isna(latest["fee_rolling_std"]) else GLOBAL_STD,
+            "fee_rolling_p75": float(latest["fee_rolling_p75"]) if not pd.isna(latest["fee_rolling_p75"]) else GLOBAL_P75,
+        }
+        
+        if "gas_used_ratio" in df.columns:
+            latest_features["ratio_lag_1"] = ratio
+            latest_features["gas_used_ratio"] = ratio
+            latest_features["ratio_rolling_mean"] = float(latest["ratio_rolling_mean"]) if not pd.isna(latest["ratio_rolling_mean"]) else 0.5
+            latest_features["ratio_rolling_std"] = float(latest["ratio_rolling_std"]) if not pd.isna(latest["ratio_rolling_std"]) else 0.05
 
-        if fee <= 0 or fee > 1000:
-            return None, 0.5, None, GLOBAL_MEAN, GLOBAL_STD
-
-        return fee, ratio, ts_wib, roll_mean, roll_std
+        return fee, ratio, ts_wib, latest_features
 
     except Exception as e:
-        return None, 0.5, None, GLOBAL_MEAN, GLOBAL_STD
+        print(f"[WARNING] get_current_data error: {e}")
+        return None, 0.5, None, {}
 
-def build_future_df(now_utc: datetime, gas_ratio: float) -> pd.DataFrame:
+def build_future_df(now_utc: datetime, latest_features: dict) -> pd.DataFrame:
     dates = pd.date_range(start=now_utc, periods=FORECAST_PERIODS, freq=FREQ)
     df = pd.DataFrame({"ds": dates})
-    if HAS_REGRESSOR:
-        df["gas_used_ratio"] = gas_ratio
+    
+    df["hour"] = df["ds"].dt.hour
+    df["day_of_week"] = df["ds"].dt.dayofweek
+    
+    for feat, val in latest_features.items():
+        df[feat] = val
+        
     return df
 
-def forecast_fee(now_utc: datetime, gas_ratio: float) -> pd.DataFrame:
-    future = build_future_df(now_utc, gas_ratio)
-    fc = FEE_MODEL.predict(future)
-    fc["yhat"]       = fc["yhat"].clip(lower=BASE_L2_FLOOR_GWEI)
-    fc["yhat_lower"] = fc["yhat_lower"].clip(lower=BASE_L2_FLOOR_GWEI)
-    fc["yhat_upper"] = fc["yhat_upper"].clip(lower=BASE_L2_FLOOR_GWEI)
-    return fc
+def forecast_fee(now_utc: datetime, latest_features: dict) -> pd.DataFrame:
+    df = build_future_df(now_utc, latest_features)
+    
+    X_pred = df[MODEL_FEATURES]
+    
+    yhat_lower = FEE_MODEL_LOWER.predict(X_pred)
+    yhat_median = FEE_MODEL_MEDIAN.predict(X_pred)
+    yhat_upper = FEE_MODEL_UPPER.predict(X_pred)
+    
+    df["yhat_lower"] = np.clip(yhat_lower, BASE_L2_FLOOR_GWEI, None)
+    df["yhat"]       = np.clip(yhat_median, BASE_L2_FLOOR_GWEI, None)
+    df["yhat_upper"] = np.clip(yhat_upper, BASE_L2_FLOOR_GWEI, None)
+    return df
 
-def forecast_ratio(now_utc: datetime) -> Optional[pd.DataFrame]:
+def forecast_ratio(now_utc: datetime, latest_features: dict) -> Optional[pd.DataFrame]:
     if not HAS_RATIO_MODEL:
         return None
-    future = pd.DataFrame({"ds": pd.date_range(start=now_utc, periods=FORECAST_PERIODS, freq=FREQ)})
-    fc = RATIO_MODEL.predict(future)
-    fc["yhat"] = fc["yhat"].clip(lower=0, upper=1)
-    return fc
+        
+    df = build_future_df(now_utc, latest_features)
+    X_pred = df[MODEL_FEATURES]
+    
+    yhat = RATIO_MODEL.predict(X_pred)
+    df["yhat"] = np.clip(yhat, 0, 1)
+    return df
+
 
 def calculate_confidence(fc_fee: pd.DataFrame) -> float:
     ci_widths = fc_fee["yhat_upper"] - fc_fee["yhat_lower"]
@@ -193,13 +221,13 @@ def compute_savings_window(current_fee: float, fc_fee: pd.DataFrame) -> dict:
         })
 
     return {
-        "min_fee_gwei":           round(min_pred, 8),
-        "min_fee_idx":            min_idx,
-        "optimal_wait_minutes":   wait_minutes,
-        "optimal_wait_hours":     wait_hours,
-        "savings_pct":            round(savings_vs_current, 2),
+        "min_fee_gwei":            round(min_pred, 8),
+        "min_fee_idx":             min_idx,
+        "optimal_wait_minutes":    wait_minutes,
+        "optimal_wait_hours":      wait_hours,
+        "savings_pct":             round(savings_vs_current, 2),
         "savings_pct_conservative": round(savings_conservative, 2),
-        "tx_savings":             tx_savings,
+        "tx_savings":              tx_savings,
     }
 
 def run_rule_engine(
@@ -210,6 +238,7 @@ def run_rule_engine(
     z_score:      float,
     confidence:   float,
     savings:      dict,
+    roll_std:     float
 ) -> dict:
     at_floor    = is_at_floor(current_fee)
     zone        = classify_zone(current_fee, z_score)
@@ -229,7 +258,7 @@ def run_rule_engine(
     urgency = min(1.0, max(0.0,
         (z_score / SPIKE_Z_THRESHOLD) * 0.4
         + (current_ratio / 1.0) * 0.3
-        + (abs(fee_1h_trend) / (GLOBAL_STD + 1e-10)) * 0.3
+        + (abs(fee_1h_trend) / (roll_std + 1e-10)) * 0.3
     ))
 
     base_result = {
@@ -277,7 +306,7 @@ def run_rule_engine(
         }
 
     if (at_floor and
-            current_ratio < RATIO_P75 and
+            current_ratio < 0.7 and
             fee_1h_trend >= 0 and
             confidence >= MIN_CONFIDENCE):
         return {
@@ -384,22 +413,14 @@ class PredictResponse(BaseModel):
     percentiles: dict
     chain_stats: dict
 
-class AnalysisResponse(BaseModel):
-    model_version: str
-    analysis_ts_wib: str
-    current_conditions: dict
-    forecast_summary: dict
-    savings_potential: dict
-    rule_engine_state: dict
-    historical_context: dict
-
+# ENDPOINTSZZZZZZ
 @app.get("/")
 def root():
     return {
         "service": "Gascope API",
         "version": MODEL_VERSION,
         "chain": "Base L2",
-        "mode": "dual-signal prescriptive",
+        "mode": "LightGBM Quantile Prescriptive",
         "status": "running",
     }
 
@@ -411,14 +432,16 @@ def get_prediction():
     start_of_day_wib = now_wib.replace(hour=0, minute=0, second=0, microsecond=0)
     start_of_day_utc = start_of_day_wib - WIB_OFFSET
 
-    current_fee, gas_ratio, ts_label, roll_mean, roll_std = get_current_data()
+    current_fee, gas_ratio, ts_label, latest_features = get_current_data()
     data_quality = "fresh"
+    
+    roll_mean = latest_features.get("fee_rolling_mean", GLOBAL_MEAN)
+    roll_std  = latest_features.get("fee_rolling_std", GLOBAL_STD)
 
-    fc_fee_full = forecast_fee(start_of_day_utc, gas_ratio or 0.5)
-    fc_ratio_full = forecast_ratio(start_of_day_utc)
+    fc_fee_full = forecast_fee(start_of_day_utc, latest_features)
+    fc_ratio_full = forecast_ratio(start_of_day_utc, latest_features)
 
     if current_fee is None:
-
         idx_now = min(range(len(fc_fee_full)), key=lambda i: abs(fc_fee_full.iloc[i]["ds"] - now_utc))
         current_fee  = float(fc_fee_full.iloc[idx_now]["yhat"])
         data_quality = "stale"
@@ -432,7 +455,6 @@ def get_prediction():
         fc_ratio_future = fc_ratio_full[fc_ratio_full["ds"] >= now_utc].copy()
 
     z_score    = compute_fee_zscore(current_fee, roll_mean, roll_std)
-
     confidence = calculate_confidence(fc_fee_future)
     savings    = compute_savings_window(current_fee, fc_fee_future)
 
@@ -444,6 +466,7 @@ def get_prediction():
         z_score=z_score,
         confidence=confidence,
         savings=savings,
+        roll_std=roll_std
     )
 
     actual_today = pd.DataFrame()
@@ -483,7 +506,7 @@ def get_prediction():
         timestamp_wib       = (now_utc + WIB_OFFSET).strftime("%Y-%m-%d %H:%M:%S"),
         model_version       = MODEL_VERSION,
         data_quality        = data_quality,
-        data_source         = "Base L2 RPC · Basescan API",
+        data_source         = "Base L2 RPC · LightGBM Engine",
         latest_data_ts_wib  = ts_label,
         recommendation      = Recommendation(
             action                   = rec["action"],
@@ -529,41 +552,36 @@ def get_metrics():
         "model_version":       MODEL_VERSION,
         "chain":               "Base L2",
         "trained_at":          REPORT.get("trained_at"),
+        "architecture":        REPORT.get("architecture"),
+        "features":            REPORT.get("features"),
         "mape_ok":             REPORT.get("mape_ok"),
         "metrics_overall":     REPORT.get("metrics_overall"),
-        "metrics_per_horizon": REPORT.get("metrics_per_horizon"),
         "ci_coverage_pct":     REPORT.get("ci_coverage_pct"),
-        "ratio_metrics":       REPORT.get("ratio_metrics"),
-        "savings_simulation":  REPORT.get("savings_simulation"),
-        "train_rows":          REPORT.get("train_rows"),
-        "test_rows":           REPORT.get("test_rows"),
-        "data_characteristics": REPORT.get("data_characteristics"),
         "percentiles":         REPORT.get("percentiles"),
-        "ratio_percentiles":   REPORT.get("ratio_percentiles"),
-        "fee_prophet_config":  REPORT.get("fee_prophet_config"),
     }
 
 @app.get("/api/analysis")
 def get_analysis():
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    current_fee, gas_ratio, ts_label, roll_mean, roll_std = get_current_data()
+    current_fee, gas_ratio, ts_label, latest_features = get_current_data()
 
     if current_fee is None:
         current_fee = GLOBAL_MEAN
+        
+    roll_mean = latest_features.get("fee_rolling_mean", GLOBAL_MEAN)
+    roll_std  = latest_features.get("fee_rolling_std", GLOBAL_STD)
 
-    fc_fee   = forecast_fee(now_utc, gas_ratio or 0.5)
-    fc_ratio = forecast_ratio(now_utc)
+    fc_fee   = forecast_fee(now_utc, latest_features)
+    fc_ratio = forecast_ratio(now_utc, latest_features)
     z_score  = compute_fee_zscore(current_fee, roll_mean, roll_std)
     conf     = calculate_confidence(fc_fee)
     savings  = compute_savings_window(current_fee, fc_fee)
+    
     rec      = run_rule_engine(
         current_fee=current_fee, fc_fee=fc_fee, fc_ratio=fc_ratio,
         current_ratio=gas_ratio or 0.5, z_score=z_score,
-        confidence=conf, savings=savings,
+        confidence=conf, savings=savings, roll_std=roll_std
     )
-
-    sim = REPORT.get("savings_simulation", {})
-    data_char = REPORT.get("data_characteristics", {})
 
     return {
         "model_version":  MODEL_VERSION,
@@ -593,10 +611,6 @@ def get_analysis():
             "savings_pct":              savings["savings_pct"],
             "savings_pct_conservative": savings["savings_pct_conservative"],
             "tx_breakdown":             savings["tx_savings"],
-            "historical_avg_savings_pct_all":   sim.get("avg_savings_pct_all", 0),
-            "historical_avg_savings_pct_spike":  sim.get("avg_savings_pct_spike", 0),
-            "historical_max_savings_pct":        sim.get("max_savings_pct", 0),
-            "historical_spike_frequency_pct":    sim.get("spike_frequency_pct", 0),
         },
 
         "rule_engine_state": {
@@ -611,9 +625,6 @@ def get_analysis():
             "floor_gwei":           BASE_L2_FLOOR_GWEI,
             "global_p90_gwei":      round(GLOBAL_P90, 8),
             "global_p99_gwei":      round(GLOBAL_P99, 8),
-            "floor_pct_of_time":    data_char.get("floor_pct", 0),
-            "spike_pct_of_time":    data_char.get("spike_pct", 0),
-            "fee_max_historical":   data_char.get("fee_max", 0),
             "model_ci_coverage":    REPORT.get("ci_coverage_pct", 0),
             "model_mape":           REPORT.get("metrics_overall", {}).get("mape", 0),
         },
@@ -624,32 +635,13 @@ def get_academic_evaluation():
     return {
         "model_version": MODEL_VERSION,
         "evaluation_timestamp": REPORT.get("trained_at"),
-        "data_summary": {
-            "total_records": REPORT.get("train_rows", 0) + REPORT.get("test_rows", 0),
-            "floor_percentage": REPORT.get("data_characteristics", {}).get("floor_pct", 0),
-            "spike_percentage": REPORT.get("data_characteristics", {}).get("spike_pct", 0),
-        },
-        "baseline_comparison_mae": REPORT.get("baselines", {}),
-        "prophet_overall_metrics": REPORT.get("metrics_overall", {}),
+        "architecture": REPORT.get("architecture", "LightGBM"),
+        "overall_metrics": REPORT.get("metrics_overall", {}),
         "spike_classification": {
             "precision": REPORT.get("metrics_overall", {}).get("precision", 0),
             "recall": REPORT.get("metrics_overall", {}).get("recall", 0),
             "f1_score": REPORT.get("metrics_overall", {}).get("f1", 0),
             "spike_mae": REPORT.get("metrics_overall", {}).get("spike_mae", 0),
-        },
-        "ablation_study": {
-            "with_gas_ratio_mae": REPORT.get("metrics_overall", {}).get("mae", 0),
-            "without_gas_ratio_mae": REPORT.get("ablation_metrics", {}).get("mae", 0),
-            "with_gas_ratio_f1": REPORT.get("metrics_overall", {}).get("f1", 0),
-            "without_gas_ratio_f1": REPORT.get("ablation_metrics", {}).get("f1", 0),
-        },
-        "time_series_cross_validation": {
-            "cv_mae_mean_1d": REPORT.get("cv_mae_mean", 0)
-        },
-        "ratio_model_status": {
-            "mape": REPORT.get("ratio_metrics", {}).get("mape", 0) if REPORT.get("ratio_metrics") else None,
-            "within_10pct": REPORT.get("ratio_metrics", {}).get("within_10pct", 0) if REPORT.get("ratio_metrics") else None,
-            "conclusion": "Failed component" if (REPORT.get("ratio_metrics", {}).get("mape", 0) > 50) else "Acceptable"
         }
     }
 
@@ -681,6 +673,5 @@ def get_status():
         "floor_gwei":        BASE_L2_FLOOR_GWEI,
         "p90_gwei":          round(GLOBAL_P90, 8),
         "p99_gwei":          round(GLOBAL_P99, 8),
-        "has_regressor":     HAS_REGRESSOR,
         "server_time_wib":   (datetime.utcnow() + WIB_OFFSET).strftime("%Y-%m-%d %H:%M:%S"),
     }

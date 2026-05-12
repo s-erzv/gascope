@@ -10,10 +10,10 @@ warnings.filterwarnings('ignore')
 
 BASE_RPC_URL     = "https://mainnet.base.org"
 SAVE_PATH        = "model/gas_fee_historical.csv"
-DAYS_HISTORY     = 30
+DAYS_HISTORY     = 150  
 INTERVAL_MINUTES = 5
 MAX_WORKERS      = 5
-BATCH_SAVE_SIZE  = 100
+BATCH_SAVE_SIZE  = 200
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
@@ -31,30 +31,44 @@ def get_latest_block_number():
         log(f"[ERROR] RPC failure: {e}")
         return None
 
-def get_block_by_number(block_number):
+def get_block_by_number(block_number, max_retries=3):
     payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": [hex(block_number), False], "id": 1}
-    try:
-        resp = requests.post(BASE_RPC_URL, json=payload, timeout=10)
-        block = resp.json().get('result')
-        if not block:
+    
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(BASE_RPC_URL, json=payload, timeout=10)
+            
+            if resp.status_code == 429:
+                sleep_time = 2 ** attempt
+                time.sleep(sleep_time)
+                continue
+                
+            resp.raise_for_status()
+            block = resp.json().get('result')
+            if not block:
+                return None
+
+            base_fee_wei = int(block.get('baseFeePerGas', '0x0'), 16)
+            gas_used = int(block.get('gasUsed', '0x0'), 16)
+            gas_limit = int(block.get('gasLimit', '0x1'), 16)
+            timestamp_unix = int(block.get('timestamp', '0x0'), 16)
+
+            return {
+                'block_number': block_number,
+                'timestamp': datetime.fromtimestamp(timestamp_unix, tz=timezone.utc),
+                'base_fee_wei': base_fee_wei,
+                'base_fee_gwei': round(base_fee_wei / 1e9, 8),
+                'gas_used': gas_used,
+                'gas_limit': gas_limit,
+                'gas_used_ratio': round(gas_used / gas_limit, 4) if gas_limit > 0 else 0,
+            }
+        except requests.exceptions.RequestException as e:
+            if attempt == max_retries - 1:
+                log(f"[ERROR] Failed fetching block {block_number} after {max_retries} retries: {e}")
+                return None
+            time.sleep(2 ** attempt)
+        except Exception:
             return None
-
-        base_fee_wei = int(block.get('baseFeePerGas', '0x0'), 16)
-        gas_used = int(block.get('gasUsed', '0x0'), 16)
-        gas_limit = int(block.get('gasLimit', '0x1'), 16)
-        timestamp_unix = int(block.get('timestamp', '0x0'), 16)
-
-        return {
-            'block_number': block_number,
-            'timestamp': datetime.fromtimestamp(timestamp_unix, tz=timezone.utc),
-            'base_fee_wei': base_fee_wei,
-            'base_fee_gwei': round(base_fee_wei / 1e9, 8),
-            'gas_used': gas_used,
-            'gas_limit': gas_limit,
-            'gas_used_ratio': round(gas_used / gas_limit, 4) if gas_limit > 0 else 0,
-        }
-    except Exception:
-        return None
 
 def main():
     log("Initializing Base L2 Historical Data Ingestion...")

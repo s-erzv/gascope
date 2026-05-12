@@ -11,6 +11,7 @@ import {
 import "./App.css";
 
 const API_BASE = "https://nupers-gascopez.hf.space";
+// const API_BASE = "http://localhost:8000";
 const REFRESH_MS = 5 * 60 * 1000;
 
 function useIsMobile(bp = 768) {
@@ -37,8 +38,8 @@ const ACTION_CFG: Record<string, ActionConfig> = {
   EXECUTE_NOW:  { label: "Eksekusi Sekarang", short: "Eksekusi", dot: "#16a34a", bg: "#F0FDF4", text: "#15803d", border: "#BBF7D0", Icon: CheckCircle2 },
   EXECUTE_SOON: { label: "Eksekusi Segera",   short: "Segera",   dot: "#2563EB", bg: "#EFF6FF", text: "#1d4ed8", border: "#BFDBFE", Icon: Clock },
   SPIKE_ALERT:  { label: "Spike Aktif!",      short: "Spike!",   dot: "#DC2626", bg: "#FEF2F2", text: "#b91c1c", border: "#FECACA", Icon: Flame },
-  HOLD:         { label: "Tahan Dulu",         short: "Tahan",    dot: "#D97706", bg: "#FFFBEB", text: "#b45309", border: "#FDE68A", Icon: TrendingDown },
-  MONITOR:      { label: "Pantau",             short: "Pantau",   dot: "#6B7280", bg: "#F9FAFB", text: "#374151", border: "#E5E7EB", Icon: Eye },
+  HOLD:         { label: "Tahan Dulu",        short: "Tahan",    dot: "#D97706", bg: "#FFFBEB", text: "#b45309", border: "#FDE68A", Icon: TrendingDown },
+  MONITOR:      { label: "Pantau",            short: "Pantau",   dot: "#6B7280", bg: "#F9FAFB", text: "#374151", border: "#E5E7EB", Icon: Eye },
 };
 
 interface ZoneConfig { label: string; color: string; bg: string; }
@@ -123,7 +124,7 @@ function Dashboard({ data, metrics, syncing, onRefresh }: { data: any; metrics: 
   const cfg      = ACTION_CFG[rec.action] || ACTION_CFG.MONITOR;
   const zone     = ZONE_CFG[rec.zone]     || ZONE_CFG.NORMAL;
   const mape     = metrics?.metrics_overall?.mape;
-  const zScore   = data.chain_stats?.z_score   ?? 0;
+  const zScore   = data.chain_stats?.z_score    ?? 0;
   const floorGwei = data.chain_stats?.floor_gwei ?? 10;
 
   return isMobile
@@ -186,11 +187,11 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <Ticker label="Gas Sekarang"    value={fmt(rec.current_fee_gwei)}    unit="Gwei" accent hi />
-          <Ticker label="Prediksi Min"    value={fmt(rec.lowest_future_gwei)}  unit="Gwei" />
-          <Ticker label="Potensi Hemat"   value={rec.savings_estimate_pct > 0 ? `${rec.savings_estimate_pct.toFixed(1)}%` : "—"} valueColor="#16a34a" />
-          <Ticker label="Tunggu Optimal"  value={rec.optimal_wait_minutes != null ? `${rec.optimal_wait_minutes} mnt` : "—"} valueColor="#2563EB" />
-          <Ticker label="Network Zone"    value={zone.label} valueColor={zone.color} />
+          <Ticker label="Gas Sekarang"   value={fmt(rec.current_fee_gwei)}   unit="Gwei" accent hi />
+          <Ticker label="Prediksi Min"   value={fmt(rec.lowest_future_gwei)}  unit="Gwei" />
+          <Ticker label="Potensi Hemat"  value={rec.savings_estimate_pct > 0 ? `${rec.savings_estimate_pct.toFixed(1)}%` : "—"} valueColor="#16a34a" />
+          <Ticker label="Tunggu Optimal" value={rec.optimal_wait_minutes != null ? `${rec.optimal_wait_minutes} mnt` : "—"} valueColor="#2563EB" />
+          <Ticker label="Network Zone"   value={zone.label} valueColor={zone.color} />
           {mape != null && (
             <div className="card-sm" style={{ padding: "13px 15px" }}>
               <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".09em", color: "#A8A5A0", marginBottom: 7 }}>MAPE</div>
@@ -205,7 +206,7 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "-.02em" }}>Proyeksi Gas Hari Ini</div>
             <div style={{ fontSize: 9, color: "#A8A5A0", marginTop: 2, fontWeight: 500 }}>
-              Forecast 24 jam · Prophet AI · {data.data_source}
+              Forecast 24 jam · LightGBM AI · {data.data_source}
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
@@ -239,7 +240,7 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
           </div>
           <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1.5px solid #F0EEE8", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
             <div style={{ display: "flex", gap: 12 }}>
-              <StatChip label="Train rows" value={metrics?.train_rows?.toLocaleString() ?? "—"} />
+              <StatChip label="AI Engine" value={metrics?.architecture?.split(" ")[0] ?? "LightGBM"} />
               <StatChip label="Coverage CI" value={metrics ? `${metrics.ci_coverage_pct?.toFixed(1) ?? "—"}%` : "—"} />
             </div>
             <div style={{ fontSize: 9, color: data.data_quality === "fresh" ? "#16a34a" : "#D97706", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
@@ -356,7 +357,7 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-.02em" }}>Proyeksi Gas Hari Ini</div>
                 <div style={{ fontSize: 10, color: "#A8A5A0", marginTop: 3, fontWeight: 500 }}>
-                  Forecast 24 jam · Prophet AI · interval 5 menit · {data.data_source}
+                  Forecast 24 jam · LightGBM AI · interval 5 menit · {data.data_source}
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -393,7 +394,7 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
 
             <div style={{ flexShrink: 0, marginTop: 12, paddingTop: 12, borderTop: "1.5px solid #F0EEE8", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ display: "flex", gap: 16 }}>
-                <StatChip label="Train rows"  value={metrics?.train_rows?.toLocaleString() ?? "—"} />
+                <StatChip label="AI Engine"  value={metrics?.architecture?.split(" ")[0] ?? "LightGBM"} />
                 <StatChip label="Coverage CI" value={metrics ? `${metrics.ci_coverage_pct?.toFixed(1) ?? "—"}%` : "—"} />
               </div>
               <div style={{ fontSize: 10, color: data.data_quality === "fresh" ? "#16a34a" : "#D97706", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
@@ -412,7 +413,6 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
     </div>
   );
 }
-
 
 function ChartTip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
