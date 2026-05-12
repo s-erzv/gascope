@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 pandas
-prophet
+numpy
 requests
 pydantic
+lightgbm
+scikit-learn
