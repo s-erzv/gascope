@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-const API_BASE = "https://nupers-gascopez.hf.space/";
+const API_BASE = "https://nupers-gascopez.hf.space";
 const REFRESH_MS = 5 * 60 * 1000;
 
 interface ActionConfig {
