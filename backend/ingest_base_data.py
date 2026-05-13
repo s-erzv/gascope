@@ -1,173 +1,208 @@
-import requests
-import pandas as pd
+import sqlite3
 import time
+import logging
 import os
-from datetime import datetime, timezone
-import warnings
+from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-warnings.filterwarnings('ignore')
+import requests
 
 BASE_RPC_URL     = "https://mainnet.base.org"
-SAVE_PATH        = "model/gas_fee_historical.csv"
-DAYS_HISTORY     = 150  
-INTERVAL_MINUTES = 5
-MAX_WORKERS      = 5
-BATCH_SAVE_SIZE  = 200
+DB_PATH          = "model/gas_fee.db"
+DAYS_HISTORY     = 90
+INTERVAL_SECONDS = 300
+MAX_WORKERS      = 4
+BATCH_COMMIT     = 200
 
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(message)s",
+    datefmt="%H:%M:%S"
+)
+log = logging.getLogger("ingest")
 
-def get_latest_block_number():
+def get_latest_block_number() -> int | None:
     payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
     try:
-        resp = requests.post(BASE_RPC_URL, json=payload, timeout=10)
-        data = resp.json()
-        if 'result' not in data:
-            log(f"[ERROR] Invalid RPC Response: {data}")
-            return None
-        return int(data['result'], 16)
+        r = requests.post(BASE_RPC_URL, json=payload, timeout=10)
+        return int(r.json()["result"], 16)
     except Exception as e:
-        log(f"[ERROR] RPC failure: {e}")
+        log.error(f"eth_blockNumber error: {e}")
         return None
 
-def get_block_by_number(block_number, max_retries=3):
-    payload = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": [hex(block_number), False], "id": 1}
-    
+def get_block_by_number(block_number: int, max_retries: int = 3) -> dict | None:
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [hex(block_number), False],
+        "id": 1
+    }
     for attempt in range(max_retries):
         try:
-            resp = requests.post(BASE_RPC_URL, json=payload, timeout=10)
-            
-            if resp.status_code == 429:
-                sleep_time = 2 ** attempt
-                time.sleep(sleep_time)
+            r = requests.post(BASE_RPC_URL, json=payload, timeout=10)
+            if r.status_code == 429:
+                time.sleep(2 ** attempt)
                 continue
-                
-            resp.raise_for_status()
-            block = resp.json().get('result')
+            r.raise_for_status()
+            block = r.json().get("result")
             if not block:
                 return None
 
-            base_fee_wei = int(block.get('baseFeePerGas', '0x0'), 16)
-            gas_used = int(block.get('gasUsed', '0x0'), 16)
-            gas_limit = int(block.get('gasLimit', '0x1'), 16)
-            timestamp_unix = int(block.get('timestamp', '0x0'), 16)
+            base_fee_wei = int(block.get("baseFeePerGas", "0x0"), 16)
+            gas_used     = int(block.get("gasUsed", "0x0"), 16)
+            gas_limit    = int(block.get("gasLimit", "0x1"), 16)
+            ts_unix      = int(block.get("timestamp", "0x0"), 16)
 
             return {
-                'block_number': block_number,
-                'timestamp': datetime.fromtimestamp(timestamp_unix, tz=timezone.utc),
-                'base_fee_wei': base_fee_wei,
-                'base_fee_gwei': round(base_fee_wei / 1e9, 8),
-                'gas_used': gas_used,
-                'gas_limit': gas_limit,
-                'gas_used_ratio': round(gas_used / gas_limit, 4) if gas_limit > 0 else 0,
+                "block_number":   block_number,
+                "timestamp":      datetime.fromtimestamp(ts_unix, tz=timezone.utc),
+                "base_fee_wei":   base_fee_wei,
+                "base_fee_gwei":  round(base_fee_wei / 1e9, 8),
+                "gas_used":       gas_used,
+                "gas_limit":      gas_limit,
+                "gas_used_ratio": round(gas_used / gas_limit, 4) if gas_limit > 0 else 0.0,
             }
-        except requests.exceptions.RequestException as e:
+        except requests.RequestException:
             if attempt == max_retries - 1:
-                log(f"[ERROR] Failed fetching block {block_number} after {max_retries} retries: {e}")
                 return None
             time.sleep(2 ** attempt)
         except Exception:
             return None
+    return None
+
+def init_db(path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    con = sqlite3.connect(path)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS gas_fee (
+            interval_ts TEXT PRIMARY KEY,
+            block_number INTEGER,
+            base_fee_gwei REAL,
+            base_fee_wei INTEGER,
+            gas_used INTEGER,
+            gas_limit INTEGER,
+            gas_used_ratio REAL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ts ON gas_fee(interval_ts)")
+    con.commit()
+    con.close()
+
+def get_oldest_ts(con: sqlite3.Connection) -> datetime | None:
+    row = con.execute("SELECT MIN(interval_ts) FROM gas_fee").fetchone()
+    if row and row[0]:
+        return datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+    return None
+
+def insert_batch(con: sqlite3.Connection, records: list[tuple]):
+    con.executemany("""
+        INSERT OR REPLACE INTO gas_fee 
+        (interval_ts, block_number, base_fee_gwei, base_fee_wei, gas_used, gas_limit, gas_used_ratio)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, records)
+    con.commit()
 
 def main():
-    log("Initializing Base L2 Historical Data Ingestion...")
-    log("Calibrating Base L2 block time...")
+    init_db(DB_PATH)
+    log.info("Mulai ingest historis Base L2...")
 
     latest_block = get_latest_block_number()
-    if not latest_block:
-        log("Gagal mendapatkan block terbaru. Keluar.")
-        return
+    assert latest_block, "Gagal ambil latest block"
 
-    sample_blocks = [get_block_by_number(latest_block - i) for i in [0, 100, 500]]
-    sample_blocks = [b for b in sample_blocks if b is not None]
-
-    if len(sample_blocks) >= 2:
-        time_diff = (sample_blocks[0]['timestamp'] - sample_blocks[-1]['timestamp']).total_seconds()
-        block_diff = sample_blocks[0]['block_number'] - sample_blocks[-1]['block_number']
-        avg_block_time = time_diff / block_diff if block_diff > 0 else 2.0
+    samples = [get_block_by_number(latest_block - i) for i in [0, 200, 1000]]
+    samples = [s for s in samples if s]
+    if len(samples) >= 2:
+        dt  = (samples[0]["timestamp"] - samples[-1]["timestamp"]).total_seconds()
+        db  = samples[0]["block_number"] - samples[-1]["block_number"]
+        avg_block_time = dt / db if db > 0 else 2.0
     else:
         avg_block_time = 2.0
 
-    log(f"Average block time calibrated at {avg_block_time:.3f} seconds.")
+    blocks_per_interval = max(1, int(INTERVAL_SECONDS / avg_block_time))
+    log.info(f"Block time: {avg_block_time:.2f}s | Blocks/interval: {blocks_per_interval}")
 
-    blocks_per_interval = int((INTERVAL_MINUTES * 60) / avg_block_time)
-    total_intervals = int(DAYS_HISTORY * 24 * 60 / INTERVAL_MINUTES)
+    con = sqlite3.connect(DB_PATH)
+    oldest_ts = get_oldest_ts(con)
+    con.close()
 
-    start_interval = 0
-    os.makedirs(os.path.dirname(SAVE_PATH), exist_ok=True)
+    now_utc = datetime.now(timezone.utc)
+    latest_block_data = get_block_by_number(latest_block)
+    latest_ts = latest_block_data["timestamp"] if latest_block_data else now_utc
 
-    if os.path.exists(SAVE_PATH):
-        try:
-            existing_df = pd.read_csv(SAVE_PATH)
-            if not existing_df.empty:
-                min_block = existing_df['block_number'].min()
-                start_interval = int((latest_block - min_block) / blocks_per_interval) + 1
-                log(f"Found existing dataset. Resuming extraction from block {min_block}.")
-        except Exception as e:
-            log(f"[WARNING] Failed to read existing CSV. Starting fresh. Error: {e}")
+    target_start = now_utc - timedelta(days=DAYS_HISTORY)
 
-    intervals_to_fetch = total_intervals - start_interval
-
-    if intervals_to_fetch <= 0:
-        log("Target history duration already fulfilled. No new data to fetch.")
+    if oldest_ts and oldest_ts <= target_start + timedelta(hours=1):
+        log.info(f"Data sudah cukup (oldest: {oldest_ts.isoformat()}). Skip.")
         return
 
-    log(f"Target intervals to fetch: {intervals_to_fetch:,}")
-    log("Initiating concurrent data extraction...")
+    fetch_from = target_start
+    fetch_to   = oldest_ts if oldest_ts else now_utc
 
-    target_blocks = [latest_block - ((start_interval + i) * blocks_per_interval) for i in range(intervals_to_fetch)]
-    target_blocks = [b for b in target_blocks if b > 0]
+    intervals = []
+    t = fetch_from
+    while t < fetch_to:
+        ts_epoch = int(t.timestamp())
+        rounded  = ts_epoch - (ts_epoch % INTERVAL_SECONDS)
+        intervals.append(datetime.fromtimestamp(rounded, tz=timezone.utc))
+        t += timedelta(seconds=INTERVAL_SECONDS)
 
-    fetched_records = []
-    failed_requests = 0
-    processed_count = 0
-    start_time = time.time()
+    if not intervals:
+        log.info("Tidak ada interval baru yang perlu di-fetch.")
+        return
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_block = {executor.submit(get_block_by_number, block): block for block in target_blocks}
+    log.info(f"Fetch {len(intervals):,} interval dari {intervals[0]} s/d {intervals[-1]}")
 
-        for future in as_completed(future_to_block):
+    def interval_to_target_block(interval_ts: datetime) -> int:
+        delta_sec   = (latest_ts - interval_ts).total_seconds()
+        blocks_back = int(delta_sec / avg_block_time)
+        return max(1, latest_block - blocks_back)
+
+    target_blocks = [(iv, interval_to_target_block(iv)) for iv in intervals]
+
+    records_buffer = []
+    failed = 0
+    done   = 0
+    start  = time.time()
+
+    con = sqlite3.connect(DB_PATH)
+
+    def fetch_task(iv_block):
+        iv, block = iv_block
+        data = get_block_by_number(block)
+        if data and 0 < data["base_fee_gwei"] < 1000:
+            return (
+                iv.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                data["block_number"],
+                round(data["base_fee_gwei"], 8),
+                data["base_fee_wei"],
+                data["gas_used"],
+                data["gas_limit"],
+                round(data["gas_used_ratio"], 4),
+            )
+        return None
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(fetch_task, tb): tb for tb in target_blocks}
+        for future in as_completed(futures):
             result = future.result()
+            done  += 1
             if result:
-                fetched_records.append(result)
+                records_buffer.append(result)
             else:
-                failed_requests += 1
+                failed += 1
 
-            processed_count += 1
+            if len(records_buffer) >= BATCH_COMMIT:
+                insert_batch(con, records_buffer)
+                records_buffer.clear()
+                elapsed = time.time() - start
+                rate    = done / elapsed
+                eta     = (len(target_blocks) - done) / rate if rate > 0 else 0
+                log.info(f"Progress: {done:,}/{len(target_blocks):,} | {rate:.1f} req/s | ETA {eta/60:.1f} min")
 
-            if len(fetched_records) >= BATCH_SAVE_SIZE:
-                df_batch = pd.DataFrame(fetched_records)
-                write_header = not os.path.exists(SAVE_PATH)
-                df_batch.to_csv(SAVE_PATH, mode='a', index=False, header=write_header)
-                fetched_records.clear()
+    if records_buffer:
+        insert_batch(con, records_buffer)
 
-                elapsed = time.time() - start_time
-                rate = processed_count / elapsed
-                eta_seconds = (len(target_blocks) - processed_count) / rate
-                log(f"Progress: {processed_count:,}/{len(target_blocks):,} blocks | Rate: {rate:.1f} req/s | ETA: {eta_seconds/60:.1f} min")
-
-    if fetched_records:
-        df_batch = pd.DataFrame(fetched_records)
-        write_header = not os.path.exists(SAVE_PATH)
-        df_batch.to_csv(SAVE_PATH, mode='a', index=False, header=write_header)
-
-    total_time = time.time() - start_time
-    log(f"Extraction complete. Time elapsed: {total_time/60:.2f} minutes.")
-    log(f"Failed requests: {failed_requests}")
-
-    log("Post-processing and cleaning dataset...")
-    final_df = pd.read_csv(SAVE_PATH)
-    final_df['timestamp'] = pd.to_datetime(final_df['timestamp'])
-    final_df = final_df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
-
-    final_df['hour'] = final_df['timestamp'].dt.hour
-    final_df['day_of_week'] = final_df['timestamp'].dt.dayofweek
-    final_df['date'] = final_df['timestamp'].dt.date
-
-    final_df = final_df[(final_df['base_fee_gwei'] > 0) & (final_df['base_fee_gwei'] < 1000)]
-    final_df.to_csv(SAVE_PATH, index=False)
-    log("Process successfully terminated. Dataset is ready for Prophet ML model.")
+    con.close()
+    log.info(f"Selesai. Failed: {failed} | Waktu: {(time.time()-start)/60:.1f} menit")
 
 if __name__ == "__main__":
     main()

@@ -11,8 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN chmod +x start.sh
-RUN chmod -R 777 /app
+RUN mkdir -p model
 
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+ 
 EXPOSE 7860
-CMD ["./start.sh"]
+ 
+CMD ["./entrypoint.sh"]

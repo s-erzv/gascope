@@ -1,39 +1,107 @@
 {
-  "trained_at": "2026-05-12T15:56:57.830265",
-  "model_version": "v20260512_1556",
-  "data_path": "model/gas_fee_historical.csv",
+  "trained_at": "2026-05-13T02:51:10.953087",
+  "model_version": "v20260513_0251",
   "architecture": "LightGBM Quantile Regression",
+  "evaluation_protocol": {
+    "split": "train | val=24h (early stopping only) | test=24h (OOS metrics)",
+    "production_refit": "all rows; n_estimators per model = best_iteration+1 from train+val ES",
+    "ci_nominal_central_pct": 80.0,
+    "ci_calibration_note": "Ideal P10\u2013P90 coverage ~80%. Jauh di atas = interval terlalu lebar (konservatif)."
+  },
   "features": [
     "hour",
     "day_of_week",
+    "minute",
     "fee_lag_1",
+    "fee_lag_2",
+    "fee_lag_3",
     "fee_rolling_mean",
     "fee_rolling_std",
+    "fee_rolling_p25",
     "fee_rolling_p75",
+    "fee_rolling_p90",
+    "fee_diff_1",
+    "fee_diff_2",
+    "fee_zscore",
     "ratio_lag_1",
     "ratio_rolling_mean",
-    "ratio_rolling_std"
+    "ratio_rolling_std",
+    "ratio_diff_1"
   ],
-  "metrics_overall": {
-    "mae": 6.895675426548658e-05,
-    "rmse": 0.0003356523727539092,
-    "mape": 1.3788793933127588,
-    "within_10pct": 97.79286926994907,
-    "precision": 0.045871559633027525,
-    "recall": 0.38461538461538464,
-    "f1": 0.08196721311475409,
-    "spike_mae": 0.0002380131523100903
-  },
-  "ci_coverage_pct": 89.04923599320882,
-  "base_l2_floor_gwei": 0.005,
-  "floor_tolerance": 0.0001,
+  "rolling_window": 72,
+  "base_l2_floor_gwei": 0.0020139155,
+  "floor_tolerance": 0.0003036837217817675,
   "spike_z_threshold": 2.0,
-  "rolling_window_hours": 6,
+  "mape_ok": true,
+  "metrics_oos_test": {
+    "mae": 2.56327036486835e-07,
+    "rmse": 3.5574890669716753e-06,
+    "mape_non_floor_pct": 0.005076474026426528,
+    "ci_coverage_p10_p90_pct": 97.91666666666666,
+    "within_10pct_pct": 100.0,
+    "n": 288,
+    "spike_only": {
+      "n": 1,
+      "mae": 5.8370111758709355e-05,
+      "mape_non_floor_pct": 1.153931219044438
+    },
+    "non_spike": {
+      "n": 287,
+      "mae": 5.383998170557187e-08
+    },
+    "ratio_oos": {
+      "mae": 0.018644807576051498,
+      "n": 288
+    },
+    "baseline_lag1": {
+      "mae": 5.124305555555541e-07,
+      "mape_non_floor_pct": 0.010198544418777584,
+      "mae_improvement_vs_model": 2.561035190687191e-07
+    }
+  },
+  "metrics_overall": {
+    "mae": 2.56327036486835e-07,
+    "rmse": 3.5574890669716753e-06,
+    "mape": 0.005076474026426528,
+    "within_10pct": 100.0
+  },
+  "ci_coverage_pct": 97.91666666666666,
+  "walk_forward_median_fee": [
+    {
+      "window": 0,
+      "test_end_ts": "2026-05-12 23:55:00+00:00",
+      "mae_median_model": 2.56327036486835e-07,
+      "mae_baseline_lag1": 5.124305555555541e-07,
+      "n_test": 288
+    },
+    {
+      "window": 1,
+      "test_end_ts": "2026-05-11 23:55:00+00:00",
+      "mae_median_model": 9.608582864868356e-07,
+      "mae_baseline_lag1": 1.9214930555555554e-06,
+      "n_test": 576
+    },
+    {
+      "window": 2,
+      "test_end_ts": "2026-05-10 23:55:00+00:00",
+      "mae_median_model": 1.5921300413915882e-06,
+      "mae_baseline_lag1": 3.147337962962962e-06,
+      "n_test": 864
+    }
+  ],
   "percentiles": {
-    "mean": 0.007242038562176164,
-    "std": 0.04697125702999328,
+    "p1": 0.0020138885,
+    "p25": 0.005,
+    "mean": 0.005554079698232616,
+    "std": 0.0030370911604239836,
     "p75": 0.005,
-    "p90": 0.007891852000000001,
-    "p99": 0.03394675890000019
+    "p90": 0.006508020000000002,
+    "p99": 0.017523102499999974
+  },
+  "production_trees": {
+    "fee_lower": 2,
+    "fee_median": 2,
+    "fee_upper": 165,
+    "ratio": 81
   }
 }

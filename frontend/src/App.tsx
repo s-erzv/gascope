@@ -1,17 +1,16 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine,
+  AreaChart, Area, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
   Zap, RefreshCw, AlertTriangle, TrendingDown,
   Clock, Activity, ArrowDown, Flame,
-  CheckCircle2, Eye,
+  CheckCircle2, Eye, Info
 } from "lucide-react";
 import "./App.css";
 
-const API_BASE = "https://nupers-gascopez.hf.space";
-// const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8000";
 const REFRESH_MS = 5 * 60 * 1000;
 
 function useIsMobile(bp = 768) {
@@ -52,6 +51,62 @@ const ZONE_CFG: Record<string, ZoneConfig> = {
 
 const fmt  = (n: any, d = 5) => typeof n === "number" ? n.toFixed(d) : "—";
 const fmtU = (n: any) => n == null ? "—" : n < 0.01 ? `$${n.toFixed(6)}` : `$${n.toFixed(4)}`;
+
+function formatGweiAxisTick(v: number, span: number) {
+  if (!Number.isFinite(v)) return "—";
+  if (span < 0.0002) return v.toFixed(8);
+  if (span < 0.002) return v.toFixed(6);
+  if (span < 0.02) return v.toFixed(5);
+  if (span < 0.15) return v.toFixed(4);
+  if (span < 1.5) return v.toFixed(3);
+  return v.toFixed(2);
+}
+
+function buildChartYScale(chartData: any[] | undefined) {
+  const vals: number[] = [];
+  for (const d of chartData ?? []) {
+    for (const k of ["actual_fee_gwei", "fee_gwei"] as const) {
+      const v = d[k];
+      if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
+    }
+  }
+  let lo = vals.length ? Math.min(...vals) : 0;
+  let hi = vals.length ? Math.max(...vals) : 0.02;
+  const pad = Math.max((hi - lo) * 0.12, hi * 0.035, 1e-9);
+  lo = Math.max(0, lo - pad);
+  hi = hi + pad;
+  if (hi <= lo) hi = lo + 0.0005;
+  const span = hi - lo;
+  return {
+    domain: [lo, hi] as [number, number],
+    tickFmt: (v: number) => formatGweiAxisTick(v, span),
+    span,
+  };
+}
+
+const JKT_TZ = "Asia/Jakarta";
+
+function jktAxisTick(ms: number, compact: boolean) {
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: JKT_TZ,
+    day: "numeric",
+    month: compact ? "numeric" : "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(ms));
+}
+
+function chartEpochTicks(chartData: any[], tickCount: number): number[] {
+  const xs = chartData.map((d) => d.time_epoch_ms).filter((x) => typeof x === "number");
+  if (!xs.length) return [];
+  if (xs.length === 1) return xs;
+  const lo = Math.min(...xs);
+  const hi = Math.max(...xs);
+  if (hi <= lo) return [lo];
+  const n = Math.max(2, tickCount);
+  return Array.from({ length: n }, (_, i) => Math.round(lo + ((hi - lo) * i) / (n - 1)));
+}
 
 export default function App() {
   const [data, setData]       = useState<any>(null);
@@ -118,6 +173,109 @@ function Err({ msg, retry }: { msg: string | null; retry: () => void }) {
   );
 }
 
+function GasProjectionChart({ chartData, compact }: { chartData: any[]; compact: boolean }) {
+  const gid = compact ? "chM" : "chD";
+  const { domain, tickFmt } = useMemo(() => buildChartYScale(chartData), [chartData]);
+  const xTicks = useMemo(() => chartEpochTicks(chartData, compact ? 5 : 7), [chartData, compact]);
+  const yTick = compact ? 8 : 9;
+  const yAxisW = compact ? 50 : 56;
+
+  return (
+    <AreaChart
+      data={chartData}
+      margin={compact ? { top: 4, right: 2, left: 0, bottom: 4 } : { top: 6, right: 6, left: 2, bottom: 6 }}
+    >
+      <defs>
+        <linearGradient id={`${gid}-act`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#10b981" stopOpacity={0.14} />
+          <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <CartesianGrid stroke="#EDEAE4" strokeDasharray="0" vertical={false} />
+      <XAxis
+        type="number"
+        dataKey="time_epoch_ms"
+        domain={["dataMin", "dataMax"]}
+        ticks={xTicks}
+        tickFormatter={(ms) => jktAxisTick(ms as number, compact)}
+        tick={{ fontSize: compact ? 7 : 8, fill: "#A8A29E", fontFamily: "'JetBrains Mono',monospace" }}
+        axisLine={false}
+        tickLine={false}
+        dy={compact ? 6 : 8}
+      />
+      <YAxis
+        domain={domain}
+        tickFormatter={tickFmt}
+        tick={{ fontSize: yTick, fill: "#A8A29E", fontFamily: "'JetBrains Mono',monospace" }}
+        axisLine={false}
+        tickLine={false}
+        width={yAxisW}
+        tickCount={compact ? 5 : 6}
+      />
+      <Tooltip content={<ChartTip />} />
+      <Area
+        type="monotone"
+        dataKey="actual_fee_gwei"
+        stroke="#0d9488"
+        strokeWidth={compact ? 1.5 : 1.75}
+        fill={`url(#${gid}-act)`}
+        dot={false}
+        connectNulls
+        isAnimationActive
+        animationDuration={compact ? 350 : 500}
+      />
+      <Line
+        type="monotone"
+        dataKey="fee_gwei"
+        stroke="#2563eb"
+        strokeWidth={compact ? 1.5 : 1.75}
+        strokeDasharray="5 4"
+        dot={false}
+        connectNulls
+        isAnimationActive={false}
+      />
+    </AreaChart>
+  );
+}
+
+function ModelTooltip({ metrics }: { metrics: any }) {
+  if (!metrics) return null;
+  const r2 = metrics?.metrics_overall?.r2;
+  const mae = metrics?.metrics_overall?.mae;
+  const arch = metrics?.architecture ?? "LightGBM";
+  
+  return (
+    <div className="model-info-trigger" style={{ position: "relative", display: "flex", alignItems: "center", cursor: "help" }}>
+      <Info size={12} color="#C4C2BC" />
+      <div className="model-info-content" style={{
+        position: "absolute",
+        bottom: "100%",
+        left: "50%",
+        transform: "translateX(-50%)",
+        marginBottom: 8,
+        background: "#27272a",
+        color: "#fff",
+        padding: "10px 12px",
+        borderRadius: 8,
+        fontSize: 10,
+        width: 180,
+        zIndex: 100,
+        pointerEvents: "none",
+        lineHeight: 1.5,
+        boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)"
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 4, borderBottom: "1px solid #3f3f46", paddingBottom: 4 }}>AI Model Summary</div>
+        <div>Architecture: <span className="mono">{arch.split(" ")[0]}</span></div>
+        {r2 != null && <div>R² Score: <span className="mono">{r2.toFixed(4)}</span></div>}
+        {mae != null && <div>MAE: <span className="mono">{mae < 0.0001 ? mae.toExponential(2) : mae.toFixed(6)} Gwei</span></div>}
+        <div style={{ marginTop: 4, fontSize: 8, color: "#a1a1aa", fontStyle: "italic" }}>
+          LightGBM Quantile Regression
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ data, metrics, syncing, onRefresh }: { data: any; metrics: any; syncing: boolean; onRefresh: () => void }) {
   const isMobile = useIsMobile();
   const rec      = data.recommendation;
@@ -125,14 +283,32 @@ function Dashboard({ data, metrics, syncing, onRefresh }: { data: any; metrics: 
   const zone     = ZONE_CFG[rec.zone]     || ZONE_CFG.NORMAL;
   const mape     = metrics?.metrics_overall?.mape;
   const zScore   = data.chain_stats?.z_score    ?? 0;
-  const floorGwei = data.chain_stats?.floor_gwei ?? 10;
+
+  const todayChartData = useMemo(() => {
+    if (!data?.chart_data) return [];
+
+    const now = data.timestamp_utc ? new Date(data.timestamp_utc + "Z") : new Date();
+
+    const startOfDay = new Date(now);
+    startOfDay.setUTCHours(0 - 7, 0, 0, 0);
+    
+    const endOfDay = new Date(startOfDay);
+    endOfDay.setUTCHours(startOfDay.getUTCHours() + 23, 59, 59, 999);
+
+    const sTs = startOfDay.getTime();
+    const eTs = endOfDay.getTime();
+
+    return data.chart_data.filter((d: any) => 
+      d.time_epoch_ms >= sTs && d.time_epoch_ms <= eTs
+    );
+  }, [data]);
 
   return isMobile
-    ? <MobileDashboard data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} floorGwei={floorGwei} />
-    : <DesktopDashboard data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} floorGwei={floorGwei} />;
+    ? <MobileDashboard data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} todayChartData={todayChartData} />
+    : <DesktopDashboard data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} todayChartData={todayChartData} />;
 }
 
-function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, floorGwei }: any) {
+function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, todayChartData }: any) {
   return (
     <div style={{ minHeight: "100dvh", background: "#F5F4F0", display: "flex", flexDirection: "column" }}>
 
@@ -189,8 +365,16 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <Ticker label="Gas Sekarang"   value={fmt(rec.current_fee_gwei)}   unit="Gwei" accent hi />
           <Ticker label="Prediksi Min"   value={fmt(rec.lowest_future_gwei)}  unit="Gwei" />
-          <Ticker label="Potensi Hemat"  value={rec.savings_estimate_pct > 0 ? `${rec.savings_estimate_pct.toFixed(1)}%` : "—"} valueColor="#16a34a" />
-          <Ticker label="Tunggu Optimal" value={rec.optimal_wait_minutes != null ? `${rec.optimal_wait_minutes} mnt` : "—"} valueColor="#2563EB" />
+          <Ticker 
+            label="Potensi Hemat"  
+            value={zone.label === "Floor" ? "Maksimal" : `${rec.savings_estimate_pct.toFixed(1)}%`} 
+            valueColor="#16a34a" 
+          />
+          <Ticker 
+            label="Tunggu Optimal" 
+            value={zone.label === "Floor" || rec.optimal_wait_minutes === 0 ? "Sekarang" : `~ ${rec.optimal_wait_minutes} mnt`} 
+            valueColor={zone.label === "Floor" || rec.optimal_wait_minutes === 0 ? "#16a34a" : "#2563EB"} 
+          />
           <Ticker label="Network Zone"   value={zone.label} valueColor={zone.color} />
           {mape != null && (
             <div className="card-sm" style={{ padding: "13px 15px" }}>
@@ -200,42 +384,19 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
           )}
         </div>
 
-        <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} zScore={zScore} floorGwei={floorGwei} currentFee={rec.current_fee_gwei} />
+        <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} zScore={zScore} />
 
         <div className="card" style={{ padding: "16px 14px 12px" }}>
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "-.02em" }}>Proyeksi Gas Hari Ini</div>
-            <div style={{ fontSize: 9, color: "#A8A5A0", marginTop: 2, fontWeight: 500 }}>
-              Forecast 24 jam · LightGBM AI · {data.data_source}
-            </div>
           </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-            <Legend color="#10b981" label="Aktual" />
-            <Legend color="#3b82f6" dashed label="Prediksi" />
-            <Legend color="#10b981" dashed label="P25 (murah)" />
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+            <Legend color="#0d9488" label="Aktual" />
+            <Legend color="#2563eb" dashed label="Prediksi" />
           </div>
           <div style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data.chart_data} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="gActual" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity={.18} />
-                    <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gForecast" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#3b82f6" stopOpacity={.1} />
-                    <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#F0EEE8" strokeDasharray="0" vertical={false} />
-                <XAxis dataKey="time_label" tick={{ fontSize: 8, fill: "#B5B3AD", fontFamily: "'JetBrains Mono',monospace" }} axisLine={false} tickLine={false} dy={6} interval={95} />
-                <YAxis tick={{ fontSize: 8, fill: "#B5B3AD", fontFamily: "'JetBrains Mono',monospace" }} tickFormatter={v => v.toFixed(1)} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
-                <Tooltip content={<ChartTip />} />
-                <ReferenceLine y={data.percentiles?.p25} stroke="#10b981" strokeDasharray="4 3" strokeOpacity={.6} strokeWidth={1.5} />
-                <Area type="monotone" dataKey="upper_gwei" stroke="none" fill="#3b82f6" fillOpacity={.05} isAnimationActive={false} />
-                <Area type="monotone" dataKey="fee_gwei" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#gForecast)" dot={false} isAnimationActive={false} />
-                <Area type="monotone" dataKey="actual_fee_gwei" stroke="#10b981" strokeWidth={2} fill="url(#gActual)" dot={false} connectNulls isAnimationActive animationDuration={600} />
-              </AreaChart>
+              <GasProjectionChart chartData={todayChartData} compact />
             </ResponsiveContainer>
           </div>
           <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1.5px solid #F0EEE8", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
@@ -259,16 +420,17 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
 
       </div>
 
-      <footer style={{ flexShrink: 0, background: "#fff", borderTop: "1.5px solid #ECEAE3", height: 30, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 16px" }}>
+      <footer style={{ flexShrink: 0, background: "#fff", borderTop: "1.5px solid #ECEAE3", height: 32, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
         <span style={{ fontSize: 8, fontWeight: 600, color: "#C4C2BC", textTransform: "uppercase", letterSpacing: ".1em" }} className="mono">
-          Gascope · Base Mainnet · {new Date().toLocaleTimeString("id-ID")} WIB
+          Gascope · Base · {new Date().toLocaleTimeString("id-ID")}
         </span>
+        <ModelTooltip metrics={metrics} />
       </footer>
     </div>
   );
 }
 
-function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, floorGwei }: any) {
+function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, todayChartData }: any) {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#F5F4F0", overflow: "hidden" }}>
 
@@ -311,8 +473,16 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
         <div style={{ flexShrink: 0, display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
           <Ticker label="Gas Sekarang"   value={fmt(rec.current_fee_gwei)}   unit="Gwei" accent hi />
           <Ticker label="Prediksi Minimum" value={fmt(rec.lowest_future_gwei)} unit="Gwei" />
-          <Ticker label="Potensi Hemat"  value={rec.savings_estimate_pct > 0 ? `${rec.savings_estimate_pct.toFixed(1)}%` : "—"} valueColor="#16a34a" />
-          <Ticker label="Tunggu Optimal" value={rec.optimal_wait_minutes != null ? `${rec.optimal_wait_minutes} menit` : "—"} valueColor="#2563EB" />
+          <Ticker 
+            label="Potensi Hemat"  
+            value={zone.label === "Floor" ? "Maksimal" : `${rec.savings_estimate_pct.toFixed(1)}%`} 
+            valueColor="#16a34a" 
+          />
+          <Ticker 
+            label="Waktu Optimal" 
+            value={zone.label === "Floor" || rec.optimal_wait_minutes === 0 ? "Sekarang" : `~ ${rec.optimal_wait_minutes} menit`} 
+            valueColor={zone.label === "Floor" || rec.optimal_wait_minutes === 0 ? "#16a34a" : "#2563EB"} 
+          />
           <Ticker label="Network Zone"   value={zone.label} valueColor={zone.color} />
         </div>
 
@@ -342,7 +512,7 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
               <p style={{ fontSize: 12, color: cfg.text, lineHeight: 1.65, opacity: .85 }}>{rec.message}</p>
             </div>
 
-            <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} zScore={zScore} floorGwei={floorGwei} currentFee={rec.current_fee_gwei} />
+            <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} zScore={zScore} />
 
             <div className="card" style={{ flex: 1, minHeight: 0, padding: "14px 16px", display: "flex", flexDirection: "column" }}>
               <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: "#A8A5A0", marginBottom: 12, flexShrink: 0 }}>Estimasi Biaya Transaksi</div>
@@ -352,43 +522,21 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
             </div>
           </div>
 
-          <div className="card" style={{ padding: "18px 20px 14px", display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="card" style={{ padding: "18px 20px 14px", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, flexShrink: 0 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-.02em" }}>Proyeksi Gas Hari Ini</div>
-                <div style={{ fontSize: 10, color: "#A8A5A0", marginTop: 3, fontWeight: 500 }}>
-                  Forecast 24 jam · LightGBM AI · interval 5 menit · {data.data_source}
-                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <Legend color="#10b981" label="Aktual" />
-                <Legend color="#3b82f6" dashed label="Prediksi" />
-                <Legend color="#10b981" dashed label="P25 (murah)" />
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <Legend color="#0d9488" label="Aktual" />
+                <Legend color="#2563eb" dashed label="Prediksi" />
               </div>
             </div>
 
             <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={data.chart_data} margin={{ top: 4, right: 4, left: -22, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="gActual" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10b981" stopOpacity={.18} />
-                      <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="gForecast" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#3b82f6" stopOpacity={.1} />
-                      <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#F0EEE8" strokeDasharray="0" vertical={false} />
-                  <XAxis dataKey="time_label" tick={{ fontSize: 9, fill: "#B5B3AD", fontFamily: "'JetBrains Mono',monospace" }} axisLine={false} tickLine={false} dy={8} interval={47} />
-                  <YAxis tick={{ fontSize: 9, fill: "#B5B3AD", fontFamily: "'JetBrains Mono',monospace" }} tickFormatter={v => v.toFixed(1)} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
-                  <Tooltip content={<ChartTip />} />
-                  <ReferenceLine y={data.percentiles?.p25} stroke="#10b981" strokeDasharray="4 3" strokeOpacity={.6} strokeWidth={1.5} />
-                  <Area type="monotone" dataKey="upper_gwei" stroke="none" fill="#3b82f6" fillOpacity={.05} isAnimationActive={false} />
-                  <Area type="monotone" dataKey="fee_gwei" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#gForecast)" dot={false} isAnimationActive={false} />
-                  <Area type="monotone" dataKey="actual_fee_gwei" stroke="#10b981" strokeWidth={2} fill="url(#gActual)" dot={false} connectNulls isAnimationActive animationDuration={600} />
-                </AreaChart>
+                <GasProjectionChart chartData={todayChartData} compact={false} />
               </ResponsiveContainer>
             </div>
 
@@ -402,12 +550,16 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
                 {data.data_quality === "fresh" ? "Live" : "Stale"} · sumber: {data.latest_data_ts_wib ?? "—"}
               </div>
             </div>
+            </div>
           </div>
         </div>
       </main>
 
       <footer style={{ flexShrink: 0, background: "#fff", borderTop: "1.5px solid #ECEAE3", height: 34, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px" }}>
-        <span style={{ fontSize: 9, fontWeight: 600, color: "#C4C2BC", textTransform: "uppercase", letterSpacing: ".1em" }}>Gascope · Non-Custodial Monitoring</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 9, fontWeight: 600, color: "#C4C2BC", textTransform: "uppercase", letterSpacing: ".1em" }}>Gascope · Non-Custodial Monitoring</span>
+          <ModelTooltip metrics={metrics} />
+        </div>
         <span style={{ fontSize: 9, fontWeight: 600, color: "#C4C2BC", textTransform: "uppercase", letterSpacing: ".1em" }} className="mono">Base Mainnet · {new Date().toLocaleTimeString("id-ID")} WIB</span>
       </footer>
     </div>
@@ -417,12 +569,18 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
 function ChartTip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0]?.payload;
+  
+  const isHistory = d.actual_fee_gwei != null;
+  const isFuture = d.fee_gwei != null;
+
   return (
     <div style={{ background: "#18181B", color: "#F5F4F0", padding: "10px 14px", borderRadius: 10, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7 }}>
       <div style={{ color: "#8C8A84", fontSize: 9, marginBottom: 4, letterSpacing: ".05em" }}>{label} WIB</div>
-      {d?.actual_fee_gwei != null && <div style={{ color: "#34d399" }}>Aktual:   {d.actual_fee_gwei.toFixed(5)} Gwei</div>}
-      <div style={{ color: "#93c5fd" }}>Prediksi: {d?.fee_gwei?.toFixed(5) ?? "—"} Gwei</div>
-      {d?.ratio_forecast != null && <div style={{ color: "#fcd34d", fontSize: 9, marginTop: 2 }}>Ratio: {(d.ratio_forecast * 100).toFixed(1)}%</div>}
+      
+      {isHistory && <div style={{ color: "#34d399" }}>Aktual:   {d.actual_fee_gwei.toFixed(5)} Gwei</div>}
+      {isFuture && <div style={{ color: "#93c5fd" }}>Prediksi: {d.fee_gwei.toFixed(5)} Gwei</div>}
+      
+      {d?.ratio_forecast != null && <div style={{ color: "#fcd34d", fontSize: 9, marginTop: 2 }}>Ratio Jaringan: {(d.ratio_forecast * 100).toFixed(1)}%</div>}
     </div>
   );
 }
@@ -430,6 +588,8 @@ function ChartTip({ active, payload, label }: any) {
 function ZonePanel({ zone, zoneCfg, p25, p75, zScore }: any) {
   const zones = ["FLOOR", "NORMAL", "ELEVATED", "SPIKE"];
   const idx = zones.indexOf(zone);
+  const isP2575Equal = p25 != null && p75 != null && p25 === p75;
+
   return (
     <div className="card-sm" style={{ padding: "12px 14px", flexShrink: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
@@ -443,10 +603,16 @@ function ZonePanel({ zone, zoneCfg, p25, p75, zScore }: any) {
           return <div key={z} style={{ flex: 1, height: 5, borderRadius: 3, background: active ? colors[z] : "#ECEAE3", transition: "background .3s" }} />;
         })}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isP2575Equal ? "1fr 1fr" : "repeat(3, 1fr)", gap: 6 }}>
         <MicroStat label="Z-Score" value={`${zScore?.toFixed(2)}σ`} unit="" />
-        <MicroStat label="P25"     value={p25 != null ? fmt(p25, 3) : "—"} unit="Gwei" />
-        <MicroStat label="P75"     value={p75 != null ? fmt(p75, 3) : "—"} unit="Gwei" />
+        {isP2575Equal ? (
+          <MicroStat label="P25/75" value={fmt(p25, 4)} unit="Gwei" />
+        ) : (
+          <>
+            <MicroStat label="P25" value={p25 != null ? fmt(p25, 4) : "—"} unit="Gwei" />
+            <MicroStat label="P75" value={p75 != null ? fmt(p75, 4) : "—"} unit="Gwei" />
+          </>
+        )}
       </div>
     </div>
   );
@@ -507,6 +673,7 @@ function Legend({ color, dashed = false, label }: any) {
 }
 
 function TxRow({ tx }: any) {
+  const hasSavings = tx.saving_pct > 0.01;
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 11px", borderRadius: 9, background: "#F8F7F3", border: "1.5px solid #ECEAE3" }}>
       <div>
@@ -515,11 +682,17 @@ function TxRow({ tx }: any) {
       </div>
       <div style={{ textAlign: "right" }}>
         <div className="mono" style={{ fontSize: 15, fontWeight: 600 }}>{fmtU(tx.cost_now_usd)}</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end", marginTop: 2 }}>
-          <ArrowDown size={9} color="#16a34a" />
-          <span style={{ fontSize: 9, fontWeight: 700, color: "#16a34a" }}>Hemat {tx.saving_pct.toFixed(0)}%</span>
-          <span style={{ fontSize: 9, color: "#B5B3AD" }}>({fmtU(tx.cost_wait_usd)} jika tunggu)</span>
-        </div>
+        {hasSavings ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end", marginTop: 2 }}>
+            <ArrowDown size={9} color="#16a34a" />
+            <span style={{ fontSize: 9, fontWeight: 700, color: "#16a34a" }}>Hemat {tx.saving_pct.toFixed(0)}%</span>
+            <span style={{ fontSize: 9, color: "#B5B3AD" }}>({fmtU(tx.cost_wait_usd)} jika tunggu)</span>
+          </div>
+        ) : (
+          <div style={{ fontSize: 9, color: "#16a34a", fontWeight: 700, marginTop: 2 }}>
+            Harga Terbaik Saat Ini
+          </div>
+        )}
       </div>
     </div>
   );
