@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://nupers-gascopez.hf.space";  
+// const API_BASE = "http://localhost:8000";
 const REFRESH_MS = 5 * 60 * 1000;
 
 function useIsMobile(bp = 768) {
