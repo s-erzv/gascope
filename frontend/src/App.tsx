@@ -107,7 +107,18 @@ function chartEpochTicks(chartData: any[], tickCount: number): number[] {
   const hi = Math.max(...xs);
   if (hi <= lo) return [lo];
   const n = Math.max(2, tickCount);
-  return Array.from({ length: n }, (_, i) => Math.round(lo + ((hi - lo) * i) / (n - 1)));
+  // Snap ticks to round WIB hour boundaries (1/2/3/6/12h step depending on span)
+  const HR = 3600 * 1000;
+  const spanHr = (hi - lo) / HR;
+  const stepHr = spanHr <= 6 ? 1 : spanHr <= 12 ? 2 : spanHr <= 24 ? 3 : spanHr <= 48 ? 6 : 12;
+  const stepMs = stepHr * HR;
+  // WIB offset = +7h: shift epoch so floor() snaps to WIB hour
+  const WIB_MS = 7 * HR;
+  const firstSnap = Math.ceil((lo + WIB_MS) / stepMs) * stepMs - WIB_MS;
+  const ticks: number[] = [];
+  for (let t = firstSnap; t <= hi && ticks.length < n + 4; t += stepMs) ticks.push(t);
+  if (!ticks.length) return [lo, hi];
+  return ticks;
 }
 
 export default function App() {
@@ -601,20 +612,30 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
   );
 }
 
-function ChartTip({ active, payload, label }: any) {
+function ChartTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0]?.payload;
-  
-  const isHistory = d.actual_fee_gwei != null;
-  const isFuture = d.fee_gwei != null;
+  if (!d) return null;
+
+  const hasActual   = d.actual_fee_gwei != null;
+  const hasForecast = d.fee_gwei != null;
+  const hasBand     = d.upper_gwei != null && d.lower_gwei != null;
+  const isHistorical = d.segment === "historical";
+
+  const headerLabel = d.time_label
+    ?? new Intl.DateTimeFormat("id-ID", {
+         timeZone: JKT_TZ, day: "numeric", month: "short",
+         hour: "2-digit", minute: "2-digit", hour12: false,
+       }).format(new Date(d.time_epoch_ms));
 
   return (
     <div style={{ background: "#18181B", color: "#F5F4F0", padding: "10px 14px", borderRadius: 10, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7 }}>
-      <div style={{ color: "#8C8A84", fontSize: 9, marginBottom: 4, letterSpacing: ".05em" }}>{label} WIB</div>
-      
-      {isHistory && <div style={{ color: "#34d399" }}>Aktual:   {d.actual_fee_gwei.toFixed(5)} Gwei</div>}
-      {isFuture && <div style={{ color: "#93c5fd" }}>Prediksi: {d.fee_gwei.toFixed(5)} Gwei</div>}
-      
+      <div style={{ color: "#8C8A84", fontSize: 9, marginBottom: 4, letterSpacing: ".05em" }}>
+        {headerLabel}{!d.time_label?.includes("WIB") && " WIB"}
+      </div>
+      {hasActual   && <div style={{ color: "#34d399" }}>Aktual:    {d.actual_fee_gwei.toFixed(5)} Gwei</div>}
+      {hasForecast && <div style={{ color: "#93c5fd" }}>{isHistorical ? "Model fit" : "Prediksi"}: {d.fee_gwei.toFixed(5)} Gwei</div>}
+      {hasBand     && <div style={{ color: "#fbbf24", fontSize: 9 }}>Batas atas: {d.upper_gwei.toFixed(5)} Gwei</div>}
       {d?.ratio_forecast != null && <div style={{ color: "#fcd34d", fontSize: 9, marginTop: 2 }}>Ratio Jaringan: {(d.ratio_forecast * 100).toFixed(1)}%</div>}
     </div>
   );
