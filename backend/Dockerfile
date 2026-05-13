@@ -13,9 +13,8 @@ COPY . .
 
 RUN mkdir -p model
 
-COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
- 
+
 EXPOSE 7860
- 
+
 CMD ["./entrypoint.sh"]

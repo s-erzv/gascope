@@ -1,12 +1,13 @@
 {
-  "trained_at": "2026-05-13T02:51:10.953087",
-  "model_version": "v20260513_0251",
-  "architecture": "LightGBM Quantile Regression",
+  "trained_at": "2026-05-13T06:57:17.319592",
+  "model_version": "v20260513_0657",
+  "architecture": "LightGBM Quantile Regression + Spike Classifier",
   "evaluation_protocol": {
-    "split": "train | val=24h (early stopping only) | test=24h (OOS metrics)",
-    "production_refit": "all rows; n_estimators per model = best_iteration+1 from train+val ES",
+    "split": "train | val=24h (ES only) | test=24h (OOS)",
+    "production_refit": "all rows; n_estimators = best_iteration+1 from ES",
     "ci_nominal_central_pct": 80.0,
-    "ci_calibration_note": "Ideal P10\u2013P90 coverage ~80%. Jauh di atas = interval terlalu lebar (konservatif)."
+    "ci_calibration_note": "Ideal P10-P90 coverage ~80%.",
+    "multistep_note": "Multi-step MAE via recursive 1-step forecast from 4 starting points."
   },
   "features": [
     "hour",
@@ -15,6 +16,9 @@
     "fee_lag_1",
     "fee_lag_2",
     "fee_lag_3",
+    "fee_lag_6",
+    "fee_lag_12",
+    "fee_lag_24",
     "fee_rolling_mean",
     "fee_rolling_std",
     "fee_rolling_p25",
@@ -22,86 +26,283 @@
     "fee_rolling_p90",
     "fee_diff_1",
     "fee_diff_2",
+    "fee_above_floor",
+    "is_at_floor",
     "fee_zscore",
     "ratio_lag_1",
     "ratio_rolling_mean",
     "ratio_rolling_std",
-    "ratio_diff_1"
+    "ratio_diff_1",
+    "hour_spike_rate"
   ],
   "rolling_window": 72,
-  "base_l2_floor_gwei": 0.0020139155,
-  "floor_tolerance": 0.0003036837217817675,
+  "spike_horizon": 12,
+  "base_l2_floor_gwei": 0.002014073,
+  "floor_tolerance": 0.00030348569163473677,
   "spike_z_threshold": 2.0,
   "mape_ok": true,
   "metrics_oos_test": {
-    "mae": 2.56327036486835e-07,
-    "rmse": 3.5574890669716753e-06,
-    "mape_non_floor_pct": 0.005076474026426528,
-    "ci_coverage_p10_p90_pct": 97.91666666666666,
+    "mae": 6.463058716093868e-08,
+    "rmse": 9.974441178832695e-07,
+    "mape_non_floor_pct": 0.0012886444025433147,
+    "ci_coverage_p10_p90_pct": 99.16317991631799,
     "within_10pct_pct": 100.0,
-    "n": 288,
+    "n": 239,
     "spike_only": {
-      "n": 1,
-      "mae": 5.8370111758709355e-05,
-      "mape_non_floor_pct": 1.153931219044438
+      "n": 0,
+      "mae": null,
+      "mape_non_floor_pct": null
     },
     "non_spike": {
-      "n": 287,
-      "mae": 5.383998170557187e-08
+      "n": 239,
+      "mae": 6.463058716093868e-08
     },
+    "r2_median_oos": -0.004216249476896028,
     "ratio_oos": {
-      "mae": 0.018644807576051498,
-      "n": 288
+      "mae": 0.01750991818031597,
+      "n": 239
     },
     "baseline_lag1": {
-      "mae": 5.124305555555541e-07,
-      "mape_non_floor_pct": 0.010198544418777584,
-      "mae_improvement_vs_model": 2.561035190687191e-07
+      "mae": 1.2903765690376149e-07,
+      "mape_non_floor_pct": 0.0025767858003904313,
+      "mae_improvement_vs_model": 6.44070697428228e-08
     }
   },
   "metrics_overall": {
-    "mae": 2.56327036486835e-07,
-    "rmse": 3.5574890669716753e-06,
-    "mape": 0.005076474026426528,
-    "within_10pct": 100.0
+    "mae": 6.463058716093868e-08,
+    "rmse": 9.974441178832695e-07,
+    "mape": 0.0012886444025433147,
+    "within_10pct": 100.0,
+    "r2": -0.004216249476896028
   },
-  "ci_coverage_pct": 97.91666666666666,
+  "spike_clf_metrics": {
+    "spike_base_rate": 0.0,
+    "n": 239
+  },
+  "multistep_mae": {
+    "mae_h60min": 0.0009255,
+    "mae_h180min": 0.00088308,
+    "mae_h360min": 0.00067616,
+    "mae_h720min": 0.00073834
+  },
   "walk_forward_median_fee": [
     {
       "window": 0,
-      "test_end_ts": "2026-05-12 23:55:00+00:00",
-      "mae_median_model": 2.56327036486835e-07,
-      "mae_baseline_lag1": 5.124305555555541e-07,
-      "n_test": 288
+      "test_end_ts": "2026-05-13 05:55:00+00:00",
+      "mae_median_model": 6.463058716093868e-08,
+      "mae_baseline_lag1": 1.2903765690376149e-07,
+      "n_test": 239
     },
     {
       "window": 1,
-      "test_end_ts": "2026-05-11 23:55:00+00:00",
-      "mae_median_model": 9.608582864868356e-07,
-      "mae_baseline_lag1": 1.9214930555555554e-06,
-      "n_test": 576
+      "test_end_ts": "2026-05-12 05:55:00+00:00",
+      "mae_median_model": 9.748366163940673e-07,
+      "mae_baseline_lag1": 1.9494497153700187e-06,
+      "n_test": 527
     },
     {
       "window": 2,
-      "test_end_ts": "2026-05-10 23:55:00+00:00",
-      "mae_median_model": 1.5921300413915882e-06,
-      "mae_baseline_lag1": 3.147337962962962e-06,
-      "n_test": 864
+      "test_end_ts": "2026-05-11 05:55:00+00:00",
+      "mae_median_model": 1.6872896728194863e-06,
+      "mae_baseline_lag1": 3.336564417177913e-06,
+      "n_test": 815
     }
   ],
+  "feature_importance_top": [
+    {
+      "feature": "ratio_rolling_mean",
+      "importance": 16
+    },
+    {
+      "feature": "fee_lag_1",
+      "importance": 14
+    },
+    {
+      "feature": "ratio_lag_1",
+      "importance": 10
+    },
+    {
+      "feature": "fee_lag_6",
+      "importance": 8
+    },
+    {
+      "feature": "ratio_rolling_std",
+      "importance": 7
+    },
+    {
+      "feature": "fee_lag_3",
+      "importance": 7
+    },
+    {
+      "feature": "hour",
+      "importance": 6
+    },
+    {
+      "feature": "fee_diff_1",
+      "importance": 6
+    },
+    {
+      "feature": "fee_lag_12",
+      "importance": 6
+    },
+    {
+      "feature": "fee_above_floor",
+      "importance": 6
+    },
+    {
+      "feature": "fee_rolling_mean",
+      "importance": 5
+    },
+    {
+      "feature": "fee_zscore",
+      "importance": 4
+    },
+    {
+      "feature": "fee_diff_2",
+      "importance": 4
+    },
+    {
+      "feature": "fee_rolling_p75",
+      "importance": 4
+    }
+  ],
+  "ci_coverage_pct": 99.16317991631799,
   "percentiles": {
-    "p1": 0.0020138885,
+    "p1": 0.0020143016,
     "p25": 0.005,
-    "mean": 0.005554079698232616,
-    "std": 0.0030370911604239836,
+    "mean": 0.0055551080871175575,
+    "std": 0.003036221576180476,
     "p75": 0.005,
-    "p90": 0.006508020000000002,
-    "p99": 0.017523102499999974
+    "p90": 0.006506470000000002,
+    "p99": 0.01752176499999999
   },
   "production_trees": {
     "fee_lower": 2,
     "fee_median": 2,
-    "fee_upper": 165,
-    "ratio": 81
+    "fee_upper": 161,
+    "ratio": 141,
+    "spike_clf": 19
+  },
+  "hourly_profiles": {
+    "0": {
+      "mean_fee": 0.005464700851851852,
+      "spike_rate": 0.022222222222222223,
+      "mean_ratio": 0.12592583333333332
+    },
+    "1": {
+      "mean_fee": 0.005556963638888889,
+      "spike_rate": 0.024074074074074074,
+      "mean_ratio": 0.1286487037037037
+    },
+    "2": {
+      "mean_fee": 0.005338565609981516,
+      "spike_rate": 0.022181146025878003,
+      "mean_ratio": 0.12454186691312384
+    },
+    "3": {
+      "mean_fee": 0.004978390293577982,
+      "spike_rate": 0.012844036697247707,
+      "mean_ratio": 0.12266412844036698
+    },
+    "4": {
+      "mean_fee": 0.005141160805555556,
+      "spike_rate": 0.004629629629629629,
+      "mean_ratio": 0.12075037037037036
+    },
+    "5": {
+      "mean_fee": 0.0049127993492208985,
+      "spike_rate": 0.0,
+      "mean_ratio": 0.12164326306141156
+    },
+    "6": {
+      "mean_fee": 0.005248451584249084,
+      "spike_rate": 0.020146520146520148,
+      "mean_ratio": 0.12255274725274727
+    },
+    "7": {
+      "mean_fee": 0.005249077435185185,
+      "spike_rate": 0.016666666666666666,
+      "mean_ratio": 0.1230625
+    },
+    "8": {
+      "mean_fee": 0.0051445496759259255,
+      "spike_rate": 0.008333333333333333,
+      "mean_ratio": 0.1253362962962963
+    },
+    "9": {
+      "mean_fee": 0.005061969944444444,
+      "spike_rate": 0.007407407407407408,
+      "mean_ratio": 0.1235438888888889
+    },
+    "10": {
+      "mean_fee": 0.005091678305555555,
+      "spike_rate": 0.012962962962962963,
+      "mean_ratio": 0.12536092592592593
+    },
+    "11": {
+      "mean_fee": 0.005629196537037038,
+      "spike_rate": 0.017592592592592594,
+      "mean_ratio": 0.12756425925925924
+    },
+    "12": {
+      "mean_fee": 0.005252803314814814,
+      "spike_rate": 0.016666666666666666,
+      "mean_ratio": 0.13327888888888886
+    },
+    "13": {
+      "mean_fee": 0.00587856111111111,
+      "spike_rate": 0.06388888888888888,
+      "mean_ratio": 0.13696953703703704
+    },
+    "14": {
+      "mean_fee": 0.006570598537037037,
+      "spike_rate": 0.0962962962962963,
+      "mean_ratio": 0.13560398148148148
+    },
+    "15": {
+      "mean_fee": 0.006751636583333333,
+      "spike_rate": 0.09907407407407408,
+      "mean_ratio": 0.1377214814814815
+    },
+    "16": {
+      "mean_fee": 0.006452072277777778,
+      "spike_rate": 0.06481481481481481,
+      "mean_ratio": 0.1323110185185185
+    },
+    "17": {
+      "mean_fee": 0.006118120888888888,
+      "spike_rate": 0.05092592592592592,
+      "mean_ratio": 0.13119851851851852
+    },
+    "18": {
+      "mean_fee": 0.006038847537037037,
+      "spike_rate": 0.028703703703703703,
+      "mean_ratio": 0.13013546296296297
+    },
+    "19": {
+      "mean_fee": 0.005660339342592592,
+      "spike_rate": 0.006481481481481481,
+      "mean_ratio": 0.12819925925925926
+    },
+    "20": {
+      "mean_fee": 0.00566292112037037,
+      "spike_rate": 0.022222222222222223,
+      "mean_ratio": 0.12420296296296295
+    },
+    "21": {
+      "mean_fee": 0.005425473472222222,
+      "spike_rate": 0.025925925925925925,
+      "mean_ratio": 0.12356944444444443
+    },
+    "22": {
+      "mean_fee": 0.005502315898148148,
+      "spike_rate": 0.041666666666666664,
+      "mean_ratio": 0.12304398148148148
+    },
+    "23": {
+      "mean_fee": 0.00515657112037037,
+      "spike_rate": 0.021296296296296296,
+      "mean_ratio": 0.12030425925925928
+    }
   }
 }

@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   AreaChart, Area, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer,
+  Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import {
   Zap, RefreshCw, AlertTriangle, TrendingDown,
   Clock, Activity, ArrowDown, Flame,
-  CheckCircle2, Eye, Info
+  CheckCircle2, Eye, Info,
+  TrendingUp, BarChart2, Layers,
 } from "lucide-react";
 import "./App.css";
 
@@ -42,12 +43,12 @@ const ACTION_CFG: Record<string, ActionConfig> = {
   MONITOR:      { label: "Pantau",            short: "Pantau",   dot: "#6B7280", bg: "#F9FAFB", text: "#374151", border: "#E5E7EB", Icon: Eye },
 };
 
-interface ZoneConfig { label: string; color: string; bg: string; }
+interface ZoneConfig { label: string; color: string; bg: string; desc: string; }
 const ZONE_CFG: Record<string, ZoneConfig> = {
-  FLOOR:    { label: "Floor",    color: "#16a34a", bg: "#F0FDF4" },
-  NORMAL:   { label: "Normal",   color: "#2563EB", bg: "#EFF6FF" },
-  ELEVATED: { label: "Elevated", color: "#D97706", bg: "#FFFBEB" },
-  SPIKE:    { label: "Spike",    color: "#DC2626", bg: "#FEF2F2" },
+  FLOOR:    { label: "Termurah",   color: "#16a34a", bg: "#F0FDF4", desc: "Fee di harga terendah — waktu terbaik" },
+  NORMAL:   { label: "Normal",     color: "#2563EB", bg: "#EFF6FF", desc: "Fee dalam kisaran wajar"               },
+  ELEVATED: { label: "Meningkat",  color: "#D97706", bg: "#FFFBEB", desc: "Fee mulai tinggi, pertimbangkan tunggu" },
+  SPIKE:    { label: "Lonjakan!",  color: "#DC2626", bg: "#FEF2F2", desc: "Fee sedang lonjak — sebaiknya tunggu"  },
 };
 
 const fmt  = (n: any, d = 5) => typeof n === "number" ? n.toFixed(d) : "—";
@@ -66,7 +67,7 @@ function formatGweiAxisTick(v: number, span: number) {
 function buildChartYScale(chartData: any[] | undefined) {
   const vals: number[] = [];
   for (const d of chartData ?? []) {
-    for (const k of ["actual_fee_gwei", "fee_gwei"] as const) {
+    for (const k of ["actual_fee_gwei", "fee_gwei", "upper_gwei"] as const) {
       const v = d[k];
       if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
     }
@@ -174,7 +175,7 @@ function Err({ msg, retry }: { msg: string | null; retry: () => void }) {
   );
 }
 
-function GasProjectionChart({ chartData, compact }: { chartData: any[]; compact: boolean }) {
+function GasProjectionChart({ chartData, compact, p90Ref }: { chartData: any[]; compact: boolean; p90Ref?: number }) {
   const gid = compact ? "chM" : "chD";
   const { domain, tickFmt } = useMemo(() => buildChartYScale(chartData), [chartData]);
   const xTicks = useMemo(() => chartEpochTicks(chartData, compact ? 5 : 7), [chartData, compact]);
@@ -190,6 +191,10 @@ function GasProjectionChart({ chartData, compact }: { chartData: any[]; compact:
         <linearGradient id={`${gid}-act`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#10b981" stopOpacity={0.14} />
           <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+        </linearGradient>
+        <linearGradient id={`${gid}-band`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#2563eb" stopOpacity={0.12} />
+          <stop offset="100%" stopColor="#2563eb" stopOpacity={0.02} />
         </linearGradient>
       </defs>
       <CartesianGrid stroke="#EDEAE4" strokeDasharray="0" vertical={false} />
@@ -214,6 +219,28 @@ function GasProjectionChart({ chartData, compact }: { chartData: any[]; compact:
         tickCount={compact ? 5 : 6}
       />
       <Tooltip content={<ChartTip />} />
+      {/* P90 spike reference line */}
+      {p90Ref != null && (
+        <ReferenceLine
+          y={p90Ref}
+          stroke="#D97706"
+          strokeDasharray="3 3"
+          strokeWidth={1}
+          label={{ value: "P90 historis", position: "insideTopRight", fontSize: 8, fill: "#D97706", fontFamily: "'JetBrains Mono',monospace" }}
+        />
+      )}
+      {/* Forecast confidence band (P10–P90) */}
+      <Area
+        type="monotone"
+        dataKey="upper_gwei"
+        stroke="none"
+        fill={`url(#${gid}-band)`}
+        dot={false}
+        connectNulls
+        isAnimationActive={false}
+        legendType="none"
+      />
+      {/* Historical actual */}
       <Area
         type="monotone"
         dataKey="actual_fee_gwei"
@@ -225,6 +252,7 @@ function GasProjectionChart({ chartData, compact }: { chartData: any[]; compact:
         isAnimationActive
         animationDuration={compact ? 350 : 500}
       />
+      {/* Forecast median line */}
       <Line
         type="monotone"
         dataKey="fee_gwei"
@@ -304,12 +332,14 @@ function Dashboard({ data, metrics, syncing, onRefresh }: { data: any; metrics: 
     );
   }, [data]);
 
+  const p90Ref = data.percentiles?.p90 as number | undefined;
+
   return isMobile
-    ? <MobileDashboard data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} todayChartData={todayChartData} />
-    : <DesktopDashboard data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} todayChartData={todayChartData} />;
+    ? <MobileDashboard  data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} todayChartData={todayChartData} p90Ref={p90Ref} />
+    : <DesktopDashboard data={data} metrics={metrics} syncing={syncing} onRefresh={onRefresh} rec={rec} cfg={cfg} zone={zone} mape={mape} zScore={zScore} todayChartData={todayChartData} p90Ref={p90Ref} />;
 }
 
-function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, todayChartData }: any) {
+function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, todayChartData, p90Ref }: any) {
   return (
     <div style={{ minHeight: "100dvh", background: "#F5F4F0", display: "flex", flexDirection: "column" }}>
 
@@ -385,7 +415,9 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
           )}
         </div>
 
-        <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} zScore={zScore} />
+        <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} />
+
+        <PerspectivePanel perspectives={data.perspectives} />
 
         <div className="card" style={{ padding: "16px 14px 12px" }}>
           <div style={{ marginBottom: 12 }}>
@@ -393,11 +425,12 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
           </div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
             <Legend color="#0d9488" label="Aktual" />
-            <Legend color="#2563eb" dashed label="Prediksi" />
+            <Legend color="#2563eb" dashed label="Prediksi AI" />
+            <Legend color="#2563eb" label="Batas Risiko" />
           </div>
           <div style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <GasProjectionChart chartData={todayChartData} compact />
+              <GasProjectionChart chartData={todayChartData} compact p90Ref={p90Ref} />
             </ResponsiveContainer>
           </div>
           <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1.5px solid #F0EEE8", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
@@ -431,7 +464,7 @@ function MobileDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, ma
   );
 }
 
-function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, todayChartData }: any) {
+function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, mape, zScore, todayChartData, p90Ref }: any) {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#F5F4F0", overflow: "hidden" }}>
 
@@ -513,7 +546,7 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
               <p style={{ fontSize: 12, color: cfg.text, lineHeight: 1.65, opacity: .85 }}>{rec.message}</p>
             </div>
 
-            <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} zScore={zScore} />
+            <ZonePanel zone={rec.zone} zoneCfg={zone} p25={data.percentiles?.p25} p75={data.percentiles?.p75} />
 
             <div className="card" style={{ flex: 1, minHeight: 0, padding: "14px 16px", display: "flex", flexDirection: "column" }}>
               <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: "#A8A5A0", marginBottom: 12, flexShrink: 0 }}>Estimasi Biaya Transaksi</div>
@@ -524,6 +557,7 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
           </div>
 
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+            <PerspectiveStrip perspectives={data.perspectives} />
             <div className="card" style={{ padding: "18px 20px 14px", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, flexShrink: 0 }}>
               <div>
@@ -537,7 +571,7 @@ function DesktopDashboard({ data, metrics, syncing, onRefresh, rec, cfg, zone, m
 
             <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <GasProjectionChart chartData={todayChartData} compact={false} />
+                <GasProjectionChart chartData={todayChartData} compact={false} p90Ref={p90Ref} />
               </ResponsiveContainer>
             </div>
 
@@ -586,32 +620,32 @@ function ChartTip({ active, payload, label }: any) {
   );
 }
 
-function ZonePanel({ zone, zoneCfg, p25, p75, zScore }: any) {
+function ZonePanel({ zone, zoneCfg, p25, p75 }: any) {
   const zones = ["FLOOR", "NORMAL", "ELEVATED", "SPIKE"];
   const idx = zones.indexOf(zone);
   const isP2575Equal = p25 != null && p75 != null && p25 === p75;
 
   return (
     <div className="card-sm" style={{ padding: "12px 14px", flexShrink: 0 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
-        <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: "#A8A5A0" }}>Network Zone</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: "#A8A5A0" }}>Status Jaringan</span>
         <span style={{ fontSize: 10, fontWeight: 700, color: zoneCfg.color, background: zoneCfg.bg, padding: "2px 8px", borderRadius: 5 }}>{zoneCfg.label}</span>
       </div>
+      <div style={{ fontSize: 9, color: "#8C8A84", marginBottom: 8 }}>{zoneCfg.desc}</div>
       <div style={{ display: "flex", gap: 3, marginBottom: 9 }}>
-        {["FLOOR", "NORMAL", "ELEVATED", "SPIKE"].map((z, i) => {
+        {(["FLOOR", "NORMAL", "ELEVATED", "SPIKE"] as const).map((z, i) => {
           const colors: Record<string, string> = { FLOOR: "#16a34a", NORMAL: "#2563EB", ELEVATED: "#D97706", SPIKE: "#DC2626" };
           const active = i === idx;
           return <div key={z} style={{ flex: 1, height: 5, borderRadius: 3, background: active ? colors[z] : "#ECEAE3", transition: "background .3s" }} />;
         })}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: isP2575Equal ? "1fr 1fr" : "repeat(3, 1fr)", gap: 6 }}>
-        <MicroStat label="Z-Score" value={`${zScore?.toFixed(2)}σ`} unit="" />
+      <div style={{ display: "grid", gridTemplateColumns: isP2575Equal ? "1fr" : "1fr 1fr", gap: 6 }}>
         {isP2575Equal ? (
-          <MicroStat label="P25/75" value={fmt(p25, 4)} unit="Gwei" />
+          <MicroStat label="Kisaran Normal" value={fmt(p25, 4)} unit="Gwei" />
         ) : (
           <>
-            <MicroStat label="P25" value={p25 != null ? fmt(p25, 4) : "—"} unit="Gwei" />
-            <MicroStat label="P75" value={p75 != null ? fmt(p75, 4) : "—"} unit="Gwei" />
+            <MicroStat label="Batas Bawah Normal" value={p25 != null ? fmt(p25, 4) : "—"} unit="Gwei" />
+            <MicroStat label="Batas Atas Normal"  value={p75 != null ? fmt(p75, 4) : "—"} unit="Gwei" />
           </>
         )}
       </div>
@@ -669,6 +703,185 @@ function Legend({ color, dashed = false, label }: any) {
           : <line x1="0" y1="2" x2="16" y2="2" stroke={color} strokeWidth="2" />}
       </svg>
       {label}
+    </div>
+  );
+}
+
+const SIGNAL_CFG: Record<string, { color: string; bg: string; label: string }> = {
+  bullish: { color: "#16a34a", bg: "#F0FDF4", label: "Aman"    },
+  neutral: { color: "#6B7280", bg: "#F9FAFB", label: "Normal"  },
+  bearish: { color: "#DC2626", bg: "#FEF2F2", label: "Waspada" },
+};
+
+const PERSPECTIVE_META: Record<string, { label: string; Icon: any }> = {
+  statistical: { label: "Harga Kini",  Icon: BarChart2   },
+  trend:       { label: "Tren",        Icon: TrendingUp  },
+  seasonality: { label: "Pola Jam",    Icon: Clock       },
+  ml_forecast: { label: "Prediksi AI", Icon: Activity    },
+  regime:      { label: "Kondisi",     Icon: Layers      },
+};
+
+function perspectiveInsight(key: string, p: any): string {
+  switch (key) {
+    case "statistical": {
+      const pct = p.percentile_rank ?? 50;
+      if (pct <= 25) return `Lebih murah dari ${(100 - pct).toFixed(0)}% waktu`;
+      if (pct >= 75) return `Lebih mahal dari ${pct.toFixed(0)}% waktu`;
+      return `Harga dalam kisaran normal`;
+    }
+    case "trend": {
+      const abs1h = Math.abs(p.change_1h_pct ?? 0);
+      if (p.direction === "rising")  return `Naik ${abs1h.toFixed(1)}% dalam 1 jam`;
+      if (p.direction === "falling") return `Turun ${abs1h.toFixed(1)}% dalam 1 jam`;
+      return `Stabil dalam 1 jam terakhir`;
+    }
+    case "seasonality": {
+      const rate = p.hour_spike_rate_pct ?? 0;
+      if (rate < 5)  return `Jam tenang — risiko lonjak ${rate.toFixed(0)}%`;
+      if (rate > 15) return `Jam ramai — risiko lonjak ${rate.toFixed(0)}%`;
+      return `Jam biasa — risiko lonjak ${rate.toFixed(0)}%`;
+    }
+    case "ml_forecast": {
+      const riskTxt = p.spike_prob_1h != null ? ` · risiko lonjak ${(p.spike_prob_1h * 100).toFixed(0)}%` : "";
+      if (p.forecast_trend === "rising")  return `AI: fee akan naik${riskTxt}`;
+      if (p.forecast_trend === "falling") return `AI: fee akan turun${riskTxt}`;
+      return `AI: fee stabil 1 jam${riskTxt}`;
+    }
+    case "regime": {
+      if (p.type === "floor_sustained") return `Stabil di harga terendah ${p.consecutive_floor_hours}j`;
+      if (p.type === "spike_active")    return `Fee sedang tinggi — coba tunggu`;
+      return `Fee dalam transisi normal`;
+    }
+    default:
+      return p.assessment ?? "";
+  }
+}
+
+function PerspectiveStrip({ perspectives }: { perspectives: any }) {
+  if (!perspectives) return null;
+  const keys = ["statistical", "trend", "seasonality", "ml_forecast", "regime"] as const;
+
+  const counts = { bullish: 0, neutral: 0, bearish: 0 };
+  keys.forEach(k => { const s = perspectives[k]?.signal; if (s in counts) (counts as any)[s]++; });
+
+  const verdictText  = counts.bearish >= 2
+    ? `${counts.bearish} Waspada — pertimbangkan tunggu`
+    : counts.bullish >= 3
+    ? `${counts.bullish} Aman — oke untuk transaksi sekarang`
+    : `Kondisi normal, fee wajar`;
+  const verdictColor = counts.bearish >= 2 ? "#DC2626" : counts.bullish >= 3 ? "#16a34a" : "#6B7280";
+
+  return (
+    <div className="card" style={{ padding: "11px 16px", flexShrink: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: "#A8A5A0" }}>
+          Analisis Multi-Sudut
+        </div>
+        <div style={{ fontSize: 9, fontWeight: 700, color: verdictColor }}>{verdictText}</div>
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        {keys.map((key) => {
+          const p = perspectives[key];
+          if (!p) return null;
+          const sig  = SIGNAL_CFG[p.signal] ?? SIGNAL_CFG.neutral;
+          const meta = PERSPECTIVE_META[key];
+          const Icon = meta.Icon;
+          return (
+            <div key={key} title={p.assessment} style={{
+              flex: 1, display: "flex", flexDirection: "column", gap: 4,
+              padding: "8px 10px", borderRadius: 8,
+              background: sig.bg, border: `1.5px solid ${sig.color}22`,
+              cursor: "default",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <Icon size={11} color={sig.color} />
+                <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".07em", color: sig.color }}>
+                  {meta.label}
+                </span>
+              </div>
+              <div style={{ fontSize: 9, fontWeight: 700, color: sig.color }}>{sig.label}</div>
+              <span style={{ fontSize: 8, color: "#6B7280", lineHeight: 1.4 }}>{perspectiveInsight(key, p)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PerspectivePanel({ perspectives }: { perspectives: any }) {
+  if (!perspectives) return null;
+  const keys = ["statistical", "trend", "seasonality", "ml_forecast", "regime"] as const;
+
+  const counts = { bullish: 0, neutral: 0, bearish: 0 };
+  keys.forEach(k => { const s = perspectives[k]?.signal; if (s in counts) (counts as any)[s]++; });
+
+  const verdictText  = counts.bearish >= 2
+    ? "Pertimbangkan tunggu sebentar"
+    : counts.bullish >= 3
+    ? "Kondisi bagus untuk transaksi"
+    : "Fee dalam kondisi normal";
+  const verdictColor = counts.bearish >= 2 ? "#DC2626" : counts.bullish >= 3 ? "#16a34a" : "#6B7280";
+  const verdictBg    = counts.bearish >= 2 ? "#FEF2F2" : counts.bullish >= 3 ? "#F0FDF4" : "#F9FAFB";
+
+  return (
+    <div className="card" style={{ padding: "14px 16px" }}>
+      <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", color: "#A8A5A0", marginBottom: 8 }}>
+        Analisis Multi-Sudut
+      </div>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "9px 12px", borderRadius: 9, marginBottom: 10,
+        background: verdictBg, border: `1.5px solid ${verdictColor}33`,
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: verdictColor, marginBottom: 2 }}>{verdictText}</div>
+          <div style={{ fontSize: 9, color: "#8C8A84" }}>
+            {counts.bullish} aman · {counts.neutral} normal · {counts.bearish} waspada dari 5 sudut pandang
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {keys.map((key) => {
+          const p = perspectives[key];
+          if (!p) return null;
+          const sig  = SIGNAL_CFG[p.signal] ?? SIGNAL_CFG.neutral;
+          const meta = PERSPECTIVE_META[key];
+          const Icon = meta.Icon;
+          return (
+            <div key={key} style={{
+              display: "flex", alignItems: "flex-start", gap: 10,
+              padding: "9px 11px", borderRadius: 9,
+              background: sig.bg, border: `1.5px solid ${sig.color}22`,
+            }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                background: "rgba(255,255,255,.7)", display: "flex", alignItems: "center", justifyContent: "center",
+                border: `1.5px solid ${sig.color}44`,
+              }}>
+                <Icon size={13} color={sig.color} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: "#8C8A84" }}>
+                    {meta.label}
+                  </span>
+                  <span style={{
+                    fontSize: 8, fontWeight: 700, padding: "1px 6px", borderRadius: 4,
+                    background: sig.bg, color: sig.color, border: `1px solid ${sig.color}55`,
+                    letterSpacing: ".04em",
+                  }}>
+                    {sig.label}
+                  </span>
+                </div>
+                <p style={{ fontSize: 10, color: "#374151", lineHeight: 1.5, margin: 0 }}>
+                  {perspectiveInsight(key, p)}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
