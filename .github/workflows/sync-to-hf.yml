@@ -23,13 +23,17 @@ jobs:
         run: |
           cd backend
 
-          rm -f *.png
-          rm -rf __pycache__
+          rm -rf __pycache__ .venv venv
 
           git init
+          git lfs install
+          git lfs track "model/*.db"
+          
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
+          
+          git add .gitattributes
           git add .
-          git commit -m "Auto deploy dari GitHub Actions"
+          git commit -m "Auto deploy dari GitHub Actions (with LFS)"
 
           git push --force https://nupers:$HF_TOKEN@huggingface.co/spaces/nupers/gascopez master:main
